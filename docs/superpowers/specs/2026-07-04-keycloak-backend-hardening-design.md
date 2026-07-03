@@ -13,7 +13,7 @@
 
 **The implementation is NOT correct for the actual deployment (multiple pods).** Every stateful component is pod-local. Without ingress sticky sessions the system produces intermittent bare 401 pages during login and broken API calls on pod hops. The observed "new tab doesn't re-login" does not prove stickiness — the hint-cookie silent re-auth path masks its absence.
 
-**Update 2026-07-04 (revision 2):** the user verified that traffic is routed through an Istio `DestinationRule` with `trafficPolicy.loadBalancer.consistentHash` (cookie/header) — requests for one user consistently reach the same pod. The multi-pod defects in §3 are therefore mitigated at the infrastructure layer, and the DB externalization originally specified in §4 is **deferred** (see §4 and Appendix A). The code-level bug fixes (§5), future-proofing (§6), and realm alignment (§7) are unaffected and remain in scope.
+**Update 2026-07-04 (revision 2, amended):** the user verified that the app's Service has its own Istio `DestinationRule` with `trafficPolicy.loadBalancer.consistentHash.useSourceIp: true` — requests for one user reach a consistent pod *as long as client source IPs survive to the app's sidecar*. `useSourceIp` is the fragile variant (see §4 risk 4); switching it to `httpCookie` is a Task-10 deliverable recommendation. The multi-pod defects in §3 are therefore mitigated at the infrastructure layer, and the DB externalization originally specified in §4 is **deferred** (see §4 and Appendix A). The code-level bug fixes (§5), future-proofing (§6), and realm alignment (§7) are unaffected and remain in scope.
 
 ## 2. Login-form matrix (when does the user see the form again?)
 
@@ -58,6 +58,7 @@ The production mesh routes each user to a consistent pod via `DestinationRule` �
 1. **Pod restart / redeploy / scale-down** drops the affected users' sessions and tokens. Recovery is silent (hint-cookie → `prompt=none`) *only while Keycloak SSO is alive*; in-flight XHRs fail once per event.
 2. **Scaling up/down reshuffles the consistent-hash ring** — a fraction of users move to a new pod mid-session and take the row-1 blip.
 3. **Per-pod schedulers** each refresh their own users' tokens. Correct with refresh-token rotation OFF (§7); would race if rotation is ever enabled.
+4. **`useSourceIp` hashing is only as sticky as the source IP.** Traffic arriving via the Istio ingress gateway is hashed on the IP the sidecar sees — commonly the gateway pod's IP: one gateway replica funnels all its users to a single app pod (hotspot), and multiple gateway replicas can send the SAME user to DIFFERENT app pods (stickiness silently broken). Corporate-NAT users share one hash; mobile users change IP mid-session. **Recommendation (Task 10 deliverable): switch the app's DestinationRule to `consistentHash.httpCookie` (Envoy-issued affinity cookie), which is immune to all of these.**
 
 **Trigger conditions for revisiting (see Appendix A):** stickiness must be removed, zero-blip rolling deploys become a requirement, rotation must be enabled, or user counts make per-pod refresh load a problem.
 
