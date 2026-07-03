@@ -18,8 +18,6 @@ spring:
             user-name-attribute: preferred_username
 
 app:
-  keycloak:
-    logout-url: http://localhost:9999/realms/test/protocol/openid-connect/logout
   post-logout-redirect-uri: http://localhost:8080/gui_epmmFormQuery/page/logged-out
   token-refresh:
     enabled: false          # no background scheduler noise in tests

@@ -19,7 +19,7 @@ import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 import org.springframework.web.cors.CorsConfigurationSource;
 
-import com.example.epmmformquery.security.CustomLogoutSuccessHandler;
+import com.example.epmmformquery.security.KeycloakLogoutSuccessHandler;
 import com.example.epmmformquery.security.LoginSuccessHandler;
 import com.example.epmmformquery.security.PrivilegeCheckFilter;
 import com.example.epmmformquery.security.RequestTracingFilter;
@@ -55,7 +55,7 @@ public class SecurityConfig {
     private final SilentAuthFailureHandler silentAuthFailureHandler;
     private final SessionRegistry sessionRegistry;
     private final CorsConfigurationSource corsConfigurationSource;
-    private final CustomLogoutSuccessHandler customLogoutSuccessHandler;
+    private final KeycloakLogoutSuccessHandler keycloakLogoutSuccessHandler;
     private final SecurityLoggingFilter securityLoggingFilter;
     private final PrivilegeCheckFilter privilegeCheckFilter;
 
@@ -74,7 +74,7 @@ public class SecurityConfig {
                           SilentAuthFailureHandler silentAuthFailureHandler,
                           SessionRegistry sessionRegistry,
                           CorsConfigurationSource corsConfigurationSource,
-                          CustomLogoutSuccessHandler customLogoutSuccessHandler,
+                          KeycloakLogoutSuccessHandler keycloakLogoutSuccessHandler,
                           SecurityLoggingFilter securityLoggingFilter,
                           PrivilegeCheckFilter privilegeCheckFilter) {
         this.authorizedClientRepository = authorizedClientRepository;
@@ -83,7 +83,7 @@ public class SecurityConfig {
         this.silentAuthFailureHandler = silentAuthFailureHandler;
         this.sessionRegistry = sessionRegistry;
         this.corsConfigurationSource = corsConfigurationSource;
-        this.customLogoutSuccessHandler = customLogoutSuccessHandler;
+        this.keycloakLogoutSuccessHandler = keycloakLogoutSuccessHandler;
         this.securityLoggingFilter = securityLoggingFilter;
         this.privilegeCheckFilter = privilegeCheckFilter;
     }
@@ -142,7 +142,7 @@ public class SecurityConfig {
 
             .logout(l -> l
                 .logoutRequestMatcher(new AntPathRequestMatcher(logoutUrl, "GET"))
-                .logoutSuccessHandler(customLogoutSuccessHandler)
+                .logoutSuccessHandler(keycloakLogoutSuccessHandler)
                 .invalidateHttpSession(true)
                 .clearAuthentication(true)
                 .deleteCookies("JSESSIONID"))

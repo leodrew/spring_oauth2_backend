@@ -32,8 +32,6 @@ app:
     base-url: ${THIRD_PARTY_API_URL:https://partner.example.com}
 
   # Keycloak URLs -----------------------------------------------------------
-  keycloak:
-    logout-url: ${KEYCLOAK_ISSUER_URI}/protocol/openid-connect/logout
   post-logout-redirect-uri: https://myapp.example.com${app.context-prefix}/page/logged-out
 
   # Optional ----------------------------------------------------------------
