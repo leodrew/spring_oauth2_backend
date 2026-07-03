@@ -1,0 +1,25 @@
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          keycloak:
+            client-id: test-client
+            client-secret: test-secret
+            authorization-grant-type: authorization_code
+            scope: openid, profile, email
+            redirect-uri: "{baseUrl}/gui_epmmFormQuery/login/oauth2/code/{registrationId}"
+        provider:
+          keycloak:
+            authorization-uri: http://localhost:9999/realms/test/protocol/openid-connect/auth
+            token-uri: http://localhost:9999/realms/test/protocol/openid-connect/token
+            jwk-set-uri: http://localhost:9999/realms/test/protocol/openid-connect/certs
+            user-info-uri: http://localhost:9999/realms/test/protocol/openid-connect/userinfo
+            user-name-attribute: preferred_username
+
+app:
+  keycloak:
+    logout-url: http://localhost:9999/realms/test/protocol/openid-connect/logout
+  post-logout-redirect-uri: http://localhost:8080/gui_epmmFormQuery/page/logged-out
+  token-refresh:
+    enabled: false          # no background scheduler noise in tests
