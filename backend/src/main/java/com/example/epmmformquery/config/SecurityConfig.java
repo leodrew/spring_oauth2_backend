@@ -14,6 +14,7 @@ import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepo
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -25,6 +26,7 @@ import com.example.epmmformquery.security.RequestTracingFilter;
 import com.example.epmmformquery.security.SecurityLoggingFilter;
 import com.example.epmmformquery.security.SilentAuthFailureHandler;
 import com.example.epmmformquery.security.SilentAuthRequestResolver;
+import com.example.epmmformquery.security.SpaCsrfTokenRequestHandler;
 import com.example.epmmformquery.security.TokenRefreshFilter;
 
 /**
@@ -145,7 +147,10 @@ public class SecurityConfig {
                 .clearAuthentication(true)
                 .deleteCookies("JSESSIONID"))
 
-            .csrf(csrf -> csrf.ignoringRequestMatchers(logoutUrl, "/rs/**"))
+            .csrf(csrf -> csrf
+                .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+                .csrfTokenRequestHandler(new SpaCsrfTokenRequestHandler())
+                .ignoringRequestMatchers(logoutUrl))
 
             .sessionManagement(s -> s
                 .maximumSessions(-1)
