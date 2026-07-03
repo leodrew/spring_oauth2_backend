@@ -22,8 +22,7 @@ public record UserInfo(
         String fullName,        // name claim
         String givenName,
         String familyName,
-        List<String> roles,
-        String accessToken      // bearer string — for passing to downstream APIs only when WebClient isn't suitable
+        List<String> roles
 ) {
     public UserInfo {
         // Defensive copy + null safety

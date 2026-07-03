@@ -53,9 +53,8 @@ public class UserInfoService {
      * Returns the current user's info, or empty if no one is authenticated
      * (or if authentication is not OAuth2-based — e.g., during tests).
      *
-     * accessToken is included but should be treated as a server-side secret.
-     * Don't return it to the SPA. WebClient handles header injection
-     * automatically; you should rarely need to read it directly.
+     * Does NOT include the access token — see currentAccessToken() for the
+     * rare server-side case that genuinely needs the raw bearer token.
      */
     public Optional<UserInfo> current() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -87,9 +86,8 @@ public class UserInfoService {
         String family   = oidc != null ? oidc.getFamilyName() : null;
 
         List<String> roles = extractRoles(principal);
-        String accessToken = loadAccessToken(oauth);
 
-        return new UserInfo(username, subject, email, name, given, family, roles, accessToken);
+        return new UserInfo(username, subject, email, name, given, family, roles);
     }
 
     /**
@@ -138,19 +136,18 @@ public class UserInfoService {
     }
 
     /**
-     * Reads the current access token from OAuth2AuthorizedClientService.
-     *
-     * The token returned here is whatever was last saved — which after the
-     * proactive filter / scheduler / reactive refresh is always fresh
-     * within the configured skew window. Returns null if the user is logged
-     * in but the client is not (rare — only between login redirect and the
-     * very first authenticated request).
+     * Raw bearer token for the rare server-side case WebClient can't cover.
+     * Never return this to the SPA.
      */
-    private String loadAccessToken(OAuth2AuthenticationToken oauth) {
+    public Optional<String> currentAccessToken() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (!(auth instanceof OAuth2AuthenticationToken oauth)) {
+            return Optional.empty();
+        }
         OAuth2AuthorizedClient client = authorizedClientService.loadAuthorizedClient(
                 CLIENT_REGISTRATION_ID, oauth.getName());
-        return (client != null && client.getAccessToken() != null)
-                ? client.getAccessToken().getTokenValue()
-                : null;
+        return Optional.ofNullable(client)
+                .map(OAuth2AuthorizedClient::getAccessToken)
+                .map(t -> t.getTokenValue());
     }
 }
