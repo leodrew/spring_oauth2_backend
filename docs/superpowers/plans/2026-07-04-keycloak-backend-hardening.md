@@ -177,6 +177,26 @@ app:
     enabled: false          # no background scheduler noise in tests
 ```
 
+- [ ] **Step 1b: Make `issuer-uri` profile-conditional in the MAIN application.yml (required for offline tests)**
+
+Rationale (discovered in execution): Spring Boot attempts OIDC discovery whenever `provider.*.issuer-uri` is present; a profile-specific YAML can override the value but can never UNSET it, so the offline test profile cannot work while the main file sets `issuer-uri` unconditionally. Making it conditional changes nothing in prod (the `test` profile is never active there).
+
+In `backend/src/main/resources/application.yml`: DELETE the line `issuer-uri: ${KEYCLOAK_ISSUER_URI}` from `spring.security.oauth2.client.provider.keycloak` (keep `user-name-attribute` there), and APPEND this new document at the end of the file:
+
+```yaml
+---
+spring:
+  config:
+    activate:
+      on-profile: "!test"
+  security:
+    oauth2:
+      client:
+        provider:
+          keycloak:
+            issuer-uri: ${KEYCLOAK_ISSUER_URI}
+```
+
 - [ ] **Step 2: Write the failing tests**
 
 `backend/src/test/java/com/example/epmmformquery/EpmmFormQueryApplicationTests.java`:
