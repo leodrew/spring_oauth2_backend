@@ -13,7 +13,7 @@
 
 **The implementation is NOT correct for the actual deployment (multiple pods).** Every stateful component is pod-local. Without ingress sticky sessions the system produces intermittent bare 401 pages during login and broken API calls on pod hops. The observed "new tab doesn't re-login" does not prove stickiness — the hint-cookie silent re-auth path masks its absence.
 
-**Immediate operational action (independent of this design):** check the ingress for a session-affinity annotation (e.g. `nginx.ingress.kubernetes.io/affinity: cookie`). If absent, users are currently experiencing intermittent login failures that retries mask.
+**Update 2026-07-04 (revision 2):** the user verified that traffic is routed through an Istio `DestinationRule` with `trafficPolicy.loadBalancer.consistentHash` (cookie/header) — requests for one user consistently reach the same pod. The multi-pod defects in §3 are therefore mitigated at the infrastructure layer, and the DB externalization originally specified in §4 is **deferred** (see §4 and Appendix A). The code-level bug fixes (§5), future-proofing (§6), and realm alignment (§7) are unaffected and remain in scope.
 
 ## 2. Login-form matrix (when does the user see the form again?)
 
@@ -48,25 +48,18 @@ All four state stores are pod-local; with round-robin routing:
 3. **`InMemoryOAuth2AuthorizedClientService`** — each pod holds its own token copy; N schedulers refresh the same user independently (multiplied token-endpoint load; mutual revocation if rotation is ON).
 4. **`SessionRegistryImpl`** — per-pod; each scheduler only sees its own pod's users.
 
-## 4. Target architecture — externalized state via the shared relational DB
+## 4. Multi-pod strategy — verified Istio consistentHash stickiness (revision 2)
 
-Use only official Spring implementations; one store (the existing RDBMS), no new infrastructure.
+The production mesh routes each user to a consistent pod via `DestinationRule` → `trafficPolicy.loadBalancer.consistentHash` (cookie/header). This neutralizes all four §3 defects for normal operation: sessions, the in-flight OAuth2 `state`, tokens, and the scheduler's user set all live on the pod the user is pinned to.
 
-| Today (per-pod) | Target (shared) |
-|---|---|
-| Tomcat in-memory `HttpSession` | `spring-session-jdbc` (`SPRING_SESSION`/`SPRING_SESSION_ATTRIBUTES` tables) — any pod resolves any `JSESSIONID` |
-| `InMemoryOAuth2AuthorizedClientService` | `JdbcOAuth2AuthorizedClientService` (`oauth2_authorized_client` table) — one token set per user shared by all pods; survives pod restarts |
-| `HttpSessionOAuth2AuthorizationRequestRepository` | Unchanged — automatically fixed once sessions are in JDBC (callback pod finds the `state` in the shared session) → eliminates the random 401s |
-| Per-pod `SessionRegistryImpl` + N schedulers | `SpringSessionBackedSessionRegistry` + scheduler guarded by a DB lock (ShedLock) so exactly one pod runs the refresh scan per tick |
+**This makes the DestinationRule a load-bearing part of the auth architecture.** Document it as such: removing or weakening it (e.g. switching to `simple: ROUND_ROBIN`) silently reintroduces intermittent login 401s and broken API calls. The reference doc and realm checklist must carry this warning.
 
-**Changes:**
-- `pom.xml`: add `spring-session-jdbc`, ShedLock (`shedlock-spring` + `shedlock-provider-jdbc-template`); remove nothing.
-- `application.yml`: `spring.session.store-type` handled by auto-config; `spring.session.jdbc.initialize-schema=never` in prod (schema applied by migration); session timeout moves to `spring.session.timeout`.
-- `TokenRefreshConfig`: swap `InMemoryOAuth2AuthorizedClientService` → `JdbcOAuth2AuthorizedClientService(jdbcOperations, clientRegistrationRepository)`; replace `SessionRegistryImpl` with `SpringSessionBackedSessionRegistry` (requires `FindByIndexNameSessionRepository`).
-- `ScheduledTokenRefreshTask`: annotate with `@SchedulerLock`; iterate principals via the session-repository index instead of the in-memory registry.
-- DB migrations: Spring Session schema + `oauth2_authorized_client` schema + ShedLock table (scripts ship with the respective libraries).
+**Residual risks accepted with this strategy (documented, not fixed):**
+1. **Pod restart / redeploy / scale-down** drops the affected users' sessions and tokens. Recovery is silent (hint-cookie → `prompt=none`) *only while Keycloak SSO is alive*; in-flight XHRs fail once per event.
+2. **Scaling up/down reshuffles the consistent-hash ring** — a fraction of users move to a new pod mid-session and take the row-1 blip.
+3. **Per-pod schedulers** each refresh their own users' tokens. Correct with refresh-token rotation OFF (§7); would race if rotation is ever enabled.
 
-**Effects:** pods become stateless (12-factor), rolling deploys and pod deaths are invisible to users, no sticky-session requirement, "never expire while active" survives infrastructure churn. Trade-off: a DB round-trip per request for session load — negligible against the current failure modes.
+**Trigger conditions for revisiting (see Appendix A):** stickiness must be removed, zero-blip rolling deploys become a requirement, rotation must be enabled, or user counts make per-pod refresh load a problem.
 
 ## 5. Bug fixes (live defects — do these first, independent of §4)
 
@@ -94,25 +87,27 @@ Use only official Spring implementations; one store (the existing RDBMS), no new
 
 ## 8. Deliverables
 
-1. Code changes per §4–§6 in the real source tree (the reference doc's embedded sources are the current source of truth; extraction happens in the implementation plan).
+1. Code changes per §5–§6 in the real source tree (the reference doc's embedded sources are the current source of truth; extraction happens in the implementation plan).
 2. Updated reference doc: corrected sources + the §2 login-form matrix added as a teaching section for other developers.
 3. This design doc.
 4. Verification checklist additions (§9).
 
 ## 9. Testing & verification
 
-**Integration tests (Testcontainers: Keycloak + PostgreSQL, two app instances against the shared DB):**
-- Authorization-code login initiated on instance A completes on instance B (proves shared session + shared `state`).
-- Request with expired access token on instance B refreshes using tokens persisted by instance A.
-- Scheduler: `invalid_grant` removes the authorized client; a simulated IO error does not.
-- SPA POST to `/rs/**` succeeds with CSRF token, 403 without.
-- Logout redirects to Keycloak `end_session` with `id_token_hint` and returns to the logged-out page without a confirmation prompt.
+**Unit/slice tests (no Keycloak needed — explicit provider endpoints in the test profile):**
+- Scheduler: `invalid_grant` removes the authorized client; a simulated transient error does not.
+- SPA CSRF: `XSRF-TOKEN` cookie issued; POST to `/rs/**` passes with token, 403 without.
+- Logout handler: redirect to Keycloak `end_session` carries `id_token_hint` + `post_logout_redirect_uri`; hint cookie cleared with `Path=/gui_epmmFormQuery`.
+- Hint-cookie scoping and actuator narrowing.
 
 **Manual/cluster verification:**
-- Kill one pod mid-session → user continues without login form and without API errors.
-- Round-robin two pods with stickiness removed → login succeeds every attempt.
-- Stop the ShedLock-holding pod → another pod's scheduler takes over within one tick.
+- Confirm the `DestinationRule` `consistentHash` policy exists in every environment (it is now a documented auth dependency).
+- Kill one pod mid-session → affected users recover silently (one blip) while Keycloak SSO is alive.
 - Full login-form matrix (§2) spot-checked: rows a, c, d, f, i.
+
+## Appendix A — deferred: DB state externalization
+
+If any §4 trigger condition fires, implement: `spring-session-jdbc` for `HttpSession` (also fixes the OAuth2 `state` handoff automatically), `JdbcOAuth2AuthorizedClientService` for tokens, and a ShedLock-guarded single-pod scheduler iterating the shared token table. This was fully planned in revision 1 (see git history of the accompanying implementation plan, Tasks 10–14, including the cross-instance Testcontainers proof) and can be resurrected as-is.
 
 ## 10. Out of scope
 
