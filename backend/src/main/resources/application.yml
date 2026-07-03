@@ -1,0 +1,92 @@
+# =============================================================================
+# pmc-epmmformquerygui — application.yml
+# Spring Boot 3.4.x · Spring Security 6.4.x · Java 17 · Keycloak OIDC
+# =============================================================================
+
+app:
+  context-prefix: /gui_epmmFormQuery
+
+  # Frontend (SPA) hosting --------------------------------------------------
+  frontend:
+    url-prefix: ${app.context-prefix}/web
+    resource-location: classpath:/gui_epmmFormQuery/web/
+    index-path: ${app.context-prefix}/web/index.html
+    classpath-base: gui_epmmFormQuery/web
+
+  # Token refresh -----------------------------------------------------------
+  token-refresh:
+    enabled: true
+    skew-seconds: 60
+    schedule-rate-ms: 60000
+
+  # Silent re-authentication -----------------------------------------------
+  silent-auth:
+    enabled: true
+    hint-cookie-name: ea_login_hint
+    hint-cookie-max-age-seconds: 2592000   # 30 days
+
+  # WebClient base URLs -----------------------------------------------------
+  downstream:
+    base-url: ${DOWNSTREAM_API_URL:http://internal-api:8080}
+  third-party:
+    base-url: ${THIRD_PARTY_API_URL:https://partner.example.com}
+
+  # Keycloak URLs -----------------------------------------------------------
+  keycloak:
+    logout-url: ${KEYCLOAK_ISSUER_URI}/protocol/openid-connect/logout
+  post-logout-redirect-uri: https://myapp.example.com${app.context-prefix}/page/logged-out
+
+  # Optional ----------------------------------------------------------------
+  privilege:
+    enabled: false                # set true to activate PrivilegeCheckFilter
+
+# Server settings — context-path NOT set on purpose (v4 design)
+server:
+  port: 8080
+  servlet:
+    session:
+      timeout: 8h
+      cookie:
+        same-site: lax
+        secure: true
+        http-only: true
+
+# Spring Security OAuth2 client ------------------------------------------------
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          keycloak:
+            client-id: ${KEYCLOAK_CLIENT_ID}
+            client-secret: ${KEYCLOAK_CLIENT_SECRET}
+            authorization-grant-type: authorization_code
+            scope: openid, profile, email
+            redirect-uri: "{baseUrl}/gui_epmmFormQuery/login/oauth2/code/{registrationId}"
+        provider:
+          keycloak:
+            issuer-uri: ${KEYCLOAK_ISSUER_URI}
+            user-name-attribute: preferred_username
+
+# Logging ---------------------------------------------------------------------
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%X{traceId:-}] %-5level %logger{36} - %msg%n"
+  level:
+    com.example.epmmformquery: INFO
+    com.example.epmmformquery.security.TokenRefreshFilter: DEBUG
+    com.example.epmmformquery.security.ScheduledTokenRefreshTask: INFO
+    com.example.epmmformquery.security.SilentAuthFailureHandler: INFO
+    com.example.epmmformquery.security.SilentAuthRequestResolver: DEBUG
+    org.springframework.security.oauth2.client: INFO
+    org.springframework.web.reactive.function.client: INFO
+
+# Actuator endpoints (referenced by SecurityConfig permitAll list)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+  endpoint:
+    health:
+      show-details: when-authorized
