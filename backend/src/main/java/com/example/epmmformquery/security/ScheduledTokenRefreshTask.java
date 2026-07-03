@@ -11,10 +11,12 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.session.SessionRegistry;
+import org.springframework.security.oauth2.client.ClientAuthorizationException;
 import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
+import org.springframework.security.oauth2.core.OAuth2ErrorCodes;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.stereotype.Component;
 
@@ -96,11 +98,19 @@ public class ScheduledTokenRefreshTask {
                     refreshed++;
                     log.debug("Background-refreshed token for {}", name);
                 }
+            } catch (ClientAuthorizationException ex) {
+                failed++;
+                if (OAuth2ErrorCodes.INVALID_GRANT.equals(ex.getError().getErrorCode())) {
+                    log.warn("Refresh token invalid for {} (invalid_grant); removing authorized client — user will silently re-auth.", name);
+                    clientService.removeAuthorizedClient(REGISTRATION_ID, name);
+                } else {
+                    log.warn("OAuth2 error refreshing for {} ({}); keeping tokens for retry next tick.",
+                            name, ex.getError().getErrorCode());
+                }
             } catch (Exception ex) {
                 failed++;
-                log.warn("Background refresh failed for {}: {}. Removing client; user must re-auth.",
+                log.warn("Transient failure refreshing for {}: {}; keeping tokens for retry next tick.",
                         name, ex.getMessage());
-                clientService.removeAuthorizedClient(REGISTRATION_ID, name);
             }
         }
 
