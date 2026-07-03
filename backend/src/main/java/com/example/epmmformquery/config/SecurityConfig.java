@@ -68,6 +68,9 @@ public class SecurityConfig {
     @Value("${app.silent-auth.hint-cookie-max-age-seconds:2592000}")
     private int hintCookieMaxAge;
 
+    @Value("${app.silent-auth.cookie-secure:true}")
+    private boolean hintCookieSecure;
+
     public SecurityConfig(OAuth2AuthorizedClientRepository authorizedClientRepository,
                           OAuth2AuthorizedClientManager authorizedClientManager,
                           SilentAuthRequestResolver silentAuthRequestResolver,
@@ -124,7 +127,8 @@ public class SecurityConfig {
 
             .authorizeHttpRequests(a -> a
                 .requestMatchers(
-                        "/actuator/**",
+                        "/actuator/health",
+                        "/actuator/health/**",
                         "/error",
                         "/favicon.ico",
                         contextPrefix + "/page/**",
@@ -177,7 +181,9 @@ public class SecurityConfig {
                 contextPrefix + "/web/",
                 authorizedClientRepository,
                 hintCookieName,
-                hintCookieMaxAge);
+                hintCookieMaxAge,
+                contextPrefix,
+                hintCookieSecure);
     }
 
     @Bean

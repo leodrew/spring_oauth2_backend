@@ -37,12 +37,15 @@ public class SilentAuthFailureHandler implements AuthenticationFailureHandler {
             new SimpleUrlAuthenticationFailureHandler();
     private final String contextPrefix;
     private final String hintCookieName;
+    private final boolean cookieSecure;
 
     public SilentAuthFailureHandler(
             @Value("${app.context-prefix:}") String contextPrefix,
-            @Value("${app.silent-auth.hint-cookie-name:ea_login_hint}") String hintCookieName) {
+            @Value("${app.silent-auth.hint-cookie-name:ea_login_hint}") String hintCookieName,
+            @Value("${app.silent-auth.cookie-secure:true}") boolean cookieSecure) {
         this.contextPrefix = contextPrefix;
         this.hintCookieName = hintCookieName;
+        this.cookieSecure = cookieSecure;
     }
 
     @Override
@@ -66,9 +69,9 @@ public class SilentAuthFailureHandler implements AuthenticationFailureHandler {
     private void clearHintCookie(HttpServletResponse response) {
         Cookie c = new Cookie(hintCookieName, "");
         c.setMaxAge(0);
-        c.setPath("/");
+        c.setPath(contextPrefix);
         c.setHttpOnly(true);
-        c.setSecure(true);
+        c.setSecure(cookieSecure);
         response.addCookie(c);
     }
 }

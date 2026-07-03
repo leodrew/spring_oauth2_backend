@@ -26,6 +26,8 @@ public class LoginSuccessHandler extends SavedRequestAwareAuthenticationSuccessH
 
     private final String hintCookieName;
     private final int hintCookieMaxAge;
+    private final String cookiePath;
+    private final boolean cookieSecure;
     @SuppressWarnings("unused")  // retained for future per-user logic (e.g. token introspection)
     private final OAuth2AuthorizedClientRepository authorizedClientRepository;
 
@@ -33,12 +35,16 @@ public class LoginSuccessHandler extends SavedRequestAwareAuthenticationSuccessH
                                String defaultTargetUrl,
                                OAuth2AuthorizedClientRepository authorizedClientRepository,
                                String hintCookieName,
-                               int hintCookieMaxAge) {
+                               int hintCookieMaxAge,
+                               String cookiePath,
+                               boolean cookieSecure) {
         super.setRequestCache(requestCache);
         super.setDefaultTargetUrl(defaultTargetUrl);
         this.authorizedClientRepository = authorizedClientRepository;
         this.hintCookieName = hintCookieName;
         this.hintCookieMaxAge = hintCookieMaxAge;
+        this.cookiePath = cookiePath;
+        this.cookieSecure = cookieSecure;
     }
 
     @Override
@@ -49,9 +55,9 @@ public class LoginSuccessHandler extends SavedRequestAwareAuthenticationSuccessH
 
         Cookie hint = new Cookie(hintCookieName, "1");
         hint.setMaxAge(hintCookieMaxAge);
-        hint.setPath("/");
+        hint.setPath(cookiePath);
         hint.setHttpOnly(true);
-        hint.setSecure(true);
+        hint.setSecure(cookieSecure);
         response.addCookie(hint);
 
         super.onAuthenticationSuccess(request, response, authentication);

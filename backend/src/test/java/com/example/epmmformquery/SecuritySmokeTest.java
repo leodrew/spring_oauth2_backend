@@ -38,4 +38,10 @@ class SecuritySmokeTest {
         mockMvc.perform(get("/gui_epmmFormQuery/rs/gui/ping"))
                 .andExpect(status().isNotFound());
     }
+
+    @Test
+    void actuatorInfoIsNotPublic() throws Exception {
+        mockMvc.perform(get("/actuator/info"))
+                .andExpect(status().is3xxRedirection());
+    }
 }

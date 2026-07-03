@@ -24,6 +24,7 @@ app:
     enabled: true
     hint-cookie-name: ea_login_hint
     hint-cookie-max-age-seconds: 2592000   # 30 days
+    cookie-secure: true   # set false ONLY for plain-HTTP local dev, or the clear-cookie fails and prompt=none loops
 
   # WebClient base URLs -----------------------------------------------------
   downstream:
