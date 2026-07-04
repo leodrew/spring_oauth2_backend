@@ -199,10 +199,10 @@ Rule of thumb: **Keycloak SSO Session Idle ≥ servlet session timeout** for
 - Standard Flow Enabled: ON
 - Valid Redirect URIs: `https://<host>/gui_epmmFormQuery/login/oauth2/code/keycloak`
 - Valid Post Logout Redirect URIs: `https://<host>/gui_epmmFormQuery/page/logged-out`
-- SSO Session Idle: sized to real user idle (e.g. 2–4h)
+- SSO Session Idle: MUST be >= servlet session timeout (8h) — use 10h
 - SSO Session Max: 8–24h
 - Access Token Lifespan: ~5 min
-- Refresh Token Max Reuse: 0 (rotation off) to avoid concurrent-refresh races
+- Revoke Refresh Token: OFF (this switch controls rotation; "Refresh Token Max Reuse" only applies when it is ON) — avoids concurrent-refresh races
 - Token mapper includes `realm_access.roles` (so `UserInfoService` sees roles)
 
 ## 8. Full source — build & configuration
@@ -2159,3 +2159,29 @@ libs stay uncompressed, and preserves the manifest.
 *End of complete reference. Companion narrative docs (first-login workflow,
 silent-auth workflow, CORS fix, Vite hosting, Dockerfile variants) exist as
 separate files if you need the deep-dive on any single topic.*
+
+---
+
+## 17. When does the user see the login form again?
+
+Key mechanism: while a servlet session is alive, `ScheduledTokenRefreshTask` (60s) keeps refreshing tokens, and every refresh grant resets Keycloak's SSO Session Idle timer. SSO Idle therefore only starts counting after the servlet session dies (8h idle) or the pod restarts.
+
+| # | Scenario | Code path | Form shown? |
+|---|----------|-----------|-------------|
+| a | Active use past access-token lifespan (~5 min) | `TokenRefreshFilter` → `manager.authorize()` → refresh grant within 60s skew | **No** |
+| b | Idle < 8h (servlet session alive) | Scheduler keeps refreshing; session cookie still valid on return | **No** |
+| c | Idle > 8h, Keycloak SSO still alive | Session dead → saved request → `/oauth2/authorization/keycloak` → hint cookie → `prompt=none` → silent code → URL replayed | **No** (302 chain "flash") |
+| d | Idle > 8h AND SSO Idle lapsed | `?error=login_required` → `SilentAuthFailureHandler` clears hint cookie → interactive flow | **Yes** |
+| e | SSO Session Max reached mid-work | Refresh grants fail `invalid_grant`; scheduler removes client → API calls fail → next full redirect → login form | **Yes** — preceded by a window of broken API calls; unsaved SPA state lost |
+| f | Single pod restart / redeploy | In-memory state gone → silent re-auth (row c) if SSO alive | **No** (one blip; in-flight XHRs fail once) |
+| g | Multi-pod, no sticky sessions | See §3 | **No form, but intermittent bare 401 pages and broken API calls** — worst UX of all rows |
+| h | 2 tabs + scheduler refresh race | Rotation OFF (recommended): shared refresh token, no race. Rotation ON: reuse detection revokes client session → transient API errors | **No** (transient errors if rotation ON) |
+| i | Explicit logout | Session invalidated, hint cookie cleared, Keycloak `end_session` | **Yes** on next visit (by design) |
+| j | Keycloak restart (non-persisted sessions) | SSO + refresh tokens gone → same as (e) | **Yes** |
+| k | Hint cookie present, SSO dead | `prompt=none` → `login_required` → cookie cleared + interactive redirect (no loop) | **Yes** (one extra round trip) |
+| l | Refresh-token max lifespan hit while active | Same mechanics as (e) | **Yes** |
+| m | New browser / device / cleared cookies | No hint cookie → normal interactive flow | **Yes** (expected) |
+
+**One-line summary for developers:** on healthy infrastructure the form appears only on first visit/new device, explicit logout, idle longer than (servlet 8h + SSO Idle), the SSO Session Max ceiling, or Keycloak losing its sessions. Everything else is silent.
+
+**Deliberate trade-off to document:** the scheduler keeps SSO alive as long as any servlet session exists — SSO Idle is NOT an idle-logout security control in this design; an abandoned open browser stays logged in until SSO Session Max.
