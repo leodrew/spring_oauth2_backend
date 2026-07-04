@@ -213,6 +213,62 @@ Entirely Keycloak-side. On success it creates its **SSO session** (its own cooki
    - sets the hint cookie: `ea_login_hint=1`, `Max-Age=2592000` (30 d), `Path=/gui_epmmFormQuery`, `HttpOnly`, `Secure` (configurable via `app.silent-auth.cookie-secure` for plain-HTTP local dev);
    - replays the saved request from the shared cache, falling back to `/gui_epmmFormQuery/web/`.
 
+#### Deep dive: the save path in step 4, and what the store actually holds
+
+Step 4 compresses three classes into one arrow. The handoff matters because the HTTP request and session are **dropped mid-chain** — only the principal survives as the key:
+
+```
+OAuth2LoginAuthenticationFilter                         (Spring internal — has tokens + authenticated principal)
+   │  saveAuthorizedClient(authorizedClient, authentication, request, response)
+   ▼
+AuthenticatedPrincipalOAuth2AuthorizedClientRepository  (adapter, from TokenRefreshConfig)
+   │  principal is authenticated (not anonymous) → request/response are DISCARDED
+   │  saveAuthorizedClient(authorizedClient, principal)      ← no session in sight from here on
+   ▼
+InMemoryOAuth2AuthorizedClientService                   (one ConcurrentHashMap for the whole JVM)
+   map.put(OAuth2AuthorizedClientId("keycloak", "alice"), authorizedClient)
+```
+
+(Only an *anonymous* principal would make the adapter fall back to session storage — that never happens behind `oauth2Login`.)
+
+One map entry looks like this — `principalName` is `Authentication.getName()`, i.e. the `preferred_username` claim per `application.yml`:
+
+```text
+// ── KEY ──────────────────────────────────────────────────────────────
+OAuth2AuthorizedClientId {
+  clientRegistrationId : "keycloak"        // spring.security.oauth2.client.registration.keycloak
+  principalName        : "alice"           // preferred_username — NOT a session id
+}
+
+// ── VALUE ────────────────────────────────────────────────────────────
+OAuth2AuthorizedClient {
+  clientRegistration : { registrationId: "keycloak", clientId: "pmc-epmmformquerygui",
+                         tokenUri: "https://keycloak…/protocol/openid-connect/token", … }
+  principalName      : "alice"
+  accessToken  : {
+    tokenValue : "eyJhbGciOiJSUzI1NiIs…"   // the Bearer value the WebClients attach (§2A)
+    issuedAt   : 2026-07-04T09:00:00Z
+    expiresAt  : 2026-07-04T09:05:00Z      // short-lived (~5 min at Keycloak default)
+    scopes     : [openid, profile, email]
+  }
+  refreshToken : {
+    tokenValue : "eyJhbGciOiJIUzUxMiIs…"   // what all three §2A refresh layers redeem
+    issuedAt   : 2026-07-04T09:00:00Z
+  }
+}
+```
+
+Why the principal key (not the session) matters — every consumer that knows the user's *name* resolves the same single entry, no `HttpServletRequest` required:
+
+| Consumer | Lookup | Would work with Spring's session-scoped default? |
+|---|---|---|
+| `TokenRefreshFilter` (per request) | `loadAuthorizedClient("keycloak", auth.getName())` | Yes — it has the request |
+| WebClient beans (outgoing calls) | shared manager → same key | Unreliable — background threads lack a request context |
+| `ScheduledTokenRefreshTask` (60 s) | iterates `SessionRegistry` principals → same key per user | Impossible — a scheduler has no HTTP session at all |
+| Second tab / second session, same user | different `JSESSIONID`, same `preferred_username` → same entry | No — each session would hold its own token copy |
+
+The flip side of one shared entry per user: concurrent refreshes from two code paths can race on the same refresh token — one more reason the realm keeps *Revoke Refresh Token: OFF* (§2A).
+
 ### Phase 5 — Authenticated request reaches the SPA
 
 Same chain, but `SecurityContextHolderFilter` now loads Alice's `OAuth2AuthenticationToken` from the session and `AuthorizationFilter` passes. No controller maps `/web/**`; `WebAppConfig`'s resource handler does, with a custom `PathResourceResolver` fallback order:
@@ -322,21 +378,61 @@ sequenceDiagram
     participant K as Keycloak
     participant SAFH as SilentAuthFailureHandler
 
-    U->>K: GET /auth?…&prompt=none  (no valid SSO cookie)
-    K-->>U: 302 → callback?error=login_required&state=…
-    U->>FC: GET callback?error=login_required
-    FC->>SAFH: onAuthenticationFailure(login_required)
-    SAFH->>U: Set-Cookie: ea_login_hint=; Max-Age=0   ← the loop guard
-    SAFH-->>U: 302 → /gui_epmmFormQuery/oauth2/authorization/keycloak
-    U->>FC: GET /oauth2/authorization/keycloak  (no hint cookie now)
+    U->>K: GET /auth with prompt none and no valid SSO cookie
+    K-->>U: 302 to callback with login_required error and state
+    U->>FC: GET callback with login_required error
+    FC->>SAFH: onAuthenticationFailure login_required
+    SAFH->>U: Clear ea_login_hint cookie with Max-Age zero
+    Note right of SAFH: the loop guard
+    SAFH-->>U: 302 to /gui_epmmFormQuery/oauth2/authorization/keycloak
+    U->>FC: GET /oauth2/authorization/keycloak with no hint cookie now
     Note over FC: resolver leaves request untouched
-    FC-->>U: 302 → keycloak/auth  (interactive)
-    K-->>U: login form — Alice authenticates normally
+    FC-->>U: 302 to keycloak auth interactive
+    K-->>U: login form where Alice authenticates normally
 ```
 
 The handler acts only on error codes **`login_required`** and **`interaction_required`**; everything else goes to the default `SimpleUrlAuthenticationFailureHandler`.
 
 > **The cookie-clear is the infinite-redirect-loop guard.** If the hint cookie survived the failure, the retry would re-add `prompt=none`, fail `login_required` again, redirect again — forever. Clearing it on first failure guarantees the retry is interactive. Corollary: the *clear* must actually work in the browser. The clearing cookie must match the original's `Path` (`/gui_epmmFormQuery`) — and if `cookie-secure=true` cookies are set over plain HTTP they're never stored/cleared consistently, which is why `app.silent-auth.cookie-secure` exists as a local-dev escape hatch.
+
+#### Deep dive: why Keycloak accepts `prompt=none` without a form
+
+There are **two independent sessions**, and in scenario B1 only one of them died:
+
+| Cookie | Sent to | Proves | Lifetime |
+|---|---|---|---|
+| `JSESSIONID` | app domain (`myapp.example.com`) | servlet session with the BFF | 8 h idle — **this is what died** |
+| `KEYCLOAK_IDENTITY` (+ `KEYCLOAK_SESSION`, `AUTH_SESSION_ID`) | Keycloak domain only | live SSO session inside Keycloak itself | SSO Idle 10 h / SSO Max — **this is still alive** |
+| `ea_login_hint` | app domain | nothing — just "this browser logged in before, silent is worth trying" | 30 d |
+
+`prompt=none` does **not** skip authentication. Per the OIDC spec it means: *authenticate using only what the browser already carries, and if any UI would be needed, return an error instead of rendering it.* What the browser still carries — for the Keycloak domain — is `KEYCLOAK_IDENTITY`: a signed token referencing Keycloak's own server-side SSO session. Keycloak validates it, finds the SSO session within its idle window, and issues a fresh authorization code with zero UI. The user's authentication never lived in our app; losing `JSESSIONID` only lost the *app's copy* of the login. This is the same mechanism that gives any second OIDC app instant SSO — here the "second app" is our own app coming back after its session died.
+
+The realm rule *SSO Session Idle (10 h) ≥ servlet timeout (8 h)* exists precisely so that whenever `JSESSIONID` expires, `KEYCLOAK_IDENTITY` is still guaranteed valid — the silent path can't miss (and §2A's scheduler keeps resetting the idle timer while any session lives).
+
+On the wire:
+
+```text
+# B1 — the authorization request Spring built (the only change is the last param)
+GET https://keycloak.example.com/realms/epmm/protocol/openid-connect/auth
+    ?response_type=code
+    &client_id=pmc-epmmformquerygui
+    &scope=openid+profile+email
+    &state=xYz9pQ…                    # anti-CSRF, held in the new servlet session — §4 stickiness!
+    &redirect_uri=https://myapp.example.com/gui_epmmFormQuery/login/oauth2/code/keycloak
+    &nonce=n-0S6…
+    &prompt=none                      # added by SilentAuthRequestResolver
+Cookie: KEYCLOAK_IDENTITY=eyJhbGciOiJIUzI1NiIs…; KEYCLOAK_SESSION=epmm/8d1e…; AUTH_SESSION_ID=…
+
+# B1 success — a fresh code, zero UI
+HTTP/1.1 302 Found
+Location: https://myapp.example.com/gui_epmmFormQuery/login/oauth2/code/keycloak
+          ?code=8c2f61b0-…&state=xYz9pQ…&session_state=8d1e…
+
+# B2 failure — an error instead of a login page
+HTTP/1.1 302 Found
+Location: https://myapp.example.com/gui_epmmFormQuery/login/oauth2/code/keycloak
+          ?error=login_required&state=xYz9pQ…
+```
 
 ### §2C — Explicit logout
 
@@ -441,12 +537,32 @@ Everything in §1–§3 is this pattern in action: `oauth2Login` is Spring Secur
 
 ### Why BFF is the best choice for this app
 
-The realistic alternative is a **public SPA client**: keycloak-js in the browser, Authorization Code + PKCE, tokens held in JS, backend converted to a pure resource server. Comparison on the axes that matter here:
+The realistic alternative is a **public SPA client**: keycloak-js in the browser, Authorization Code + PKCE, tokens held in JS, backend converted to a pure resource server. That flow looks like this:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor SPA as React SPA<br/>(keycloak-js in the browser)
+    participant K as Keycloak<br/>(public client, no secret)
+    participant RS as Spring backend<br/>(stateless resource server)
+
+    SPA->>K: 302 → /auth?response_type=code&code_challenge=S256(verifier)&…
+    Note over K: login form (first time) or SSO cookie (after) — same as BFF
+    K-->>SPA: 302 back → SPA URL with ?code=…
+    SPA->>K: POST /token { code, code_verifier }  — CORS XHR from JS, no client_secret
+    K-->>SPA: { access_token, refresh_token } → held in JavaScript memory
+    SPA->>RS: fetch /rs/… + Authorization: Bearer eyJ… (attached by SPA code)
+    Note over RS: validate JWT locally (JWKS signature, iss, exp, aud)<br/>no session, no cookies, no token storage
+    SPA->>K: keycloak-js updateToken() — a JS timer redeems the refresh_token
+```
+
+Note what moved: the token exchange, token storage, and refresh all migrate from the server classes of §2A into browser JavaScript. §1–§2 (and the §1 store deep-dive) stop existing server-side — and so does the Istio stickiness dependency of §4, which is the pattern's genuine upside: a fully stateless backend where any pod can serve any request. The comparison shows what that upside costs:
 
 | Axis | BFF (this app) | Public SPA client (keycloak-js) |
 |---|---|---|
 | Token theft via XSS | Tokens are server-side; XSS cannot read them. A hijacked tab can call `/rs/**` only while open (cookies are HttpOnly) | Any XSS can exfiltrate tokens — refresh token included — for offline reuse. This is the decisive axis |
 | Client type | Confidential (secret + PKCE-grade protection server-side) | Public — anyone can impersonate the client ID; only PKCE protects the code exchange |
+| Server state / scaling | Sticky pods required — the §4 `consistentHash` DestinationRule is load-bearing | Fully stateless; any pod serves any request (the decisive axis *for* this model) |
 | Session continuity when idle | Server keeps tokens warm (§2A layer 3) even while the SPA is asleep | Browser must be open and running JS to refresh |
 | Silent SSO check | Top-level `prompt=none` redirect (§2B) — unaffected by third-party-cookie phase-out | keycloak-js's classic silent check uses a hidden **iframe**, which needs the Keycloak SSO cookie in a third-party context — exactly what modern browsers now block |
 | Serialization safety | The `UserInfo` record exposed to the SPA has **no token field** — it *cannot* leak a bearer token by accident | The SPA holds the real tokens by design |
