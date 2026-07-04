@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this workspace is
 
-The Maven project now lives in **`backend/`** — a real, compilable Spring Boot source tree (Spring Boot 3.5.x / Spring Security 6.4.x / Java 17 / Keycloak OIDC / React-Vite SPA / Kubernetes) for the **pmc-epmmformquerygui** project. It was extracted from the reference doc's embedded code blocks in Task 1 of `docs/superpowers/plans/2026-07-04-keycloak-backend-hardening.md`; `backend/` — not the markdown — is now the source of truth for code changes.
+The Maven project now lives in **`backend/`** — a real, compilable Spring Boot source tree (Spring Boot 3.5.x / Spring Security 6.5.x / Java 17 / Keycloak OIDC / React-Vite SPA / Kubernetes) for the **pmc-epmmformquerygui** project. It was extracted from the reference doc's embedded code blocks in Task 1 of `docs/superpowers/plans/2026-07-04-keycloak-backend-hardening.md`; `backend/` — not the markdown — is now the source of truth for code changes.
 
 Documentation responsibilities are split three ways:
 - `pmc-epmmformquerygui-COMPLETE.md` (repo root) — the narrative/teaching reference document: auth-flow diagrams, setup steps, gotchas, and (§17) the full "when does the user see the login form again?" matrix. Read it to understand *why* the code is shaped this way.
@@ -13,9 +13,9 @@ Documentation responsibilities are split three ways:
 
 ## Commands
 
-- Run locally: `./mvnw spring-boot:run` (from `backend/`; needs env vars `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET`, `KEYCLOAK_ISSUER_URI`; optional `DOWNSTREAM_API_URL`, `THIRD_PARTY_API_URL`)
+- Run locally: `mvn spring-boot:run` (from `backend/`; needs env vars `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET`, `KEYCLOAK_ISSUER_URI`; optional `DOWNSTREAM_API_URL`, `THIRD_PARTY_API_URL`)
 - Test: `mvn -B test` (from `backend/`)
-- Build: `mvn -B clean package -DskipTests` (from `backend/`), then `docker build -f Dockerfile -t <registry>/pmc-epmmformquerygui:${TAG} .` from repo root
+- Build: `mvn -B clean package -DskipTests` (from `backend/`), then `docker build -f Dockerfile -t <registry>/pmc-epmmformquerygui:${TAG} .` from repo root (note: the Dockerfile has not been extracted yet — it exists only as the §14 code block in `pmc-epmmformquerygui-COMPLETE.md`; extract it before running this)
 - Frontend must be built by Vite with `base: '/gui_epmmFormQuery/web/'`; the Dockerfile injects the SPA bundle into the pre-built jar ("jar surgery"), normalizing any build output folder to `dist`
 
 **Toolchain note:** Java and Maven are portable installs under `C:\Users\leo01\tools\` (JDK 17, Maven 3.9.x). The user-level `JAVA_HOME`/`Path` environment variables already point there, so a normal shell should find `java`/`mvn` without extra steps. `.superpowers/sdd/env.ps1` (and `env.sh`) are session-scratch fallbacks written for earlier task sessions where those user-level vars weren't picked up — only source one of them if `java -version` / `mvn -v` come back not-found.
@@ -37,7 +37,7 @@ Token storage is a **principal-keyed `InMemoryOAuth2AuthorizedClientService`** (
 
 **Outgoing calls:** two `WebClient` beans (`downstreamWebClient`, `thirdPartyWebClient`) — always inject with `@Qualifier`. They attach `Authorization: Bearer` automatically via the shared manager; never set the Authorization header manually (bypasses refresh, causes sporadic 401s).
 
-**`UserInfoService`** reads claims from the already-validated `OidcUser` in the SecurityContext — no extra HTTP call to Keycloak. Roles come from authorities (stripped of `ROLE_`) plus Keycloak's `realm_access.roles` claim. The `UserInfo` record carries only claims (username, subject, email, name, roles) — it has no access-token field, so serializing it to the SPA can never leak a bearer token.
+**`UserInfoService`** reads claims from the already-validated `OidcUser` in the SecurityContext — no extra HTTP call to Keycloak. Roles come from authorities (stripped of `ROLE_`) plus Keycloak's `realm_access.roles` claim. The `UserInfo` record carries only claims (username, subject, email, fullName, givenName, familyName, roles) — it has no access-token field, so serializing it to the SPA can never leak a bearer token.
 
 ## Critical constraints
 
