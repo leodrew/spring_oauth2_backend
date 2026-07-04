@@ -200,12 +200,14 @@ Rule of thumb: **Keycloak SSO Session Idle ≥ servlet session timeout** for
 - Valid Redirect URIs: `https://<host>/gui_epmmFormQuery/login/oauth2/code/keycloak`
 - Valid Post Logout Redirect URIs: `https://<host>/gui_epmmFormQuery/page/logged-out`
 - SSO Session Idle: MUST be >= servlet session timeout (8h) — use 10h
-- SSO Session Max: 8–24h
+- SSO Session Max: 12–14h (hard ceiling: active users WILL see the login form when it lapses — cover the longest workday)
 - Access Token Lifespan: ~5 min
 - Revoke Refresh Token: OFF (this switch controls rotation; "Refresh Token Max Reuse" only applies when it is ON) — avoids concurrent-refresh races
 - Token mapper includes `realm_access.roles` (so `UserInfoService` sees roles)
 
 ## 8. Full source — build & configuration
+
+> **⚠️ SUPERSEDED — do not copy from §8–§13.** These embedded sources are the ORIGINAL (pre-hardening) snapshot, kept for narrative/teaching context only. The live, corrected code is in **`backend/src/`** — it fixes several defects still present below (bearer-token leak in `UserInfo`, token destruction on transient refresh errors, logout without `id_token_hint`, dead unprefixed CSRF ignore, deprecated `AntPathRequestMatcher`, unconditional `issuer-uri`, Boot 3.4.x). When code and this section disagree, `backend/` wins. See §17 and `CLAUDE.md` for what changed.
 
 ### `pom.xml`
 
