@@ -5,6 +5,7 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
+import org.springframework.http.HttpMethod;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -16,7 +17,7 @@ import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
-import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 import org.springframework.web.cors.CorsConfigurationSource;
 
 import com.example.epmmformquery.security.KeycloakLogoutSuccessHandler;
@@ -145,7 +146,8 @@ public class SecurityConfig {
                 .failureHandler(silentAuthFailureHandler))
 
             .logout(l -> l
-                .logoutRequestMatcher(new AntPathRequestMatcher(logoutUrl, "GET"))
+                .logoutRequestMatcher(
+                        PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.GET, logoutUrl))
                 .logoutSuccessHandler(keycloakLogoutSuccessHandler)
                 .invalidateHttpSession(true)
                 .clearAuthentication(true)
