@@ -8,6 +8,7 @@ The Maven project now lives in **`backend/`** — a real, compilable Spring Boot
 
 Documentation responsibilities are split three ways:
 - `pmc-epmmformquerygui-COMPLETE.md` (repo root) — the narrative/teaching reference document: auth-flow diagrams, setup steps, gotchas, and (§17) the full "when does the user see the login form again?" matrix. Read it to understand *why* the code is shaped this way.
+- `docs/auth-workflow.md` — the auth-flow walkthrough traced from the current `backend/` code: first login, token refresh, silent re-auth, the "when does the login form appear?" matrix, DestinationRule `useSourceIp` vs `httpCookie`, and the BFF rationale. Supersedes the old root-level `spring_first_login_workflow.md` / `spring_silent_auth_workflow.md` (deleted).
 - `docs/keycloak-realm-checklist.md` — the concrete realm/client setting values for the production Keycloak realm.
 - `docs/istio-stickiness.md` — the Istio mesh dependency that multi-pod correctness relies on (see "Critical constraints" below).
 
