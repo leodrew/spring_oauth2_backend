@@ -2,12 +2,13 @@
 
 > **Supersedes** `spring_first_login_workflow.md` and `spring_silent_auth_workflow.md` (both described the older "v4" iteration: Spring Boot 3.4.5, `AntPathRequestMatcher`, `CustomLogoutSuccessHandler`, CSRF-exempt `/rs/**`). This document is traced from the **current `backend/` source tree** — Spring Boot 3.5.x, Spring Security 6.5.x, Java 17, Keycloak OIDC, React-Vite SPA, Kubernetes + Istio.
 >
-> Companion docs: `docs/keycloak-realm-checklist.md` (realm settings), `docs/istio-stickiness.md` (mesh dependency, summarized in §4 here), `pmc-epmmformquerygui-COMPLETE.md` (full narrative reference).
+> Companion docs: `docs/keycloak-realm-checklist.md` (realm settings), `docs/istio-stickiness.md` (mesh dependency, summarized in §4 here), `docs/reviews/2026-07-09-spring-oidc-oauth2-review.md` (best-practices review: known gaps + accepted deviations), `pmc-epmmformquerygui-COMPLETE.md` (full narrative reference).
 
 ---
 
 ## Contents
 
+- [Intro — OAuth2 with Keycloak: the security lifecycle (DevOps primer)](#intro--oauth2-with-keycloak-the-security-lifecycle-devops-primer)
 - [§0 — TL;DR and architecture map](#0--tldr-and-architecture-map)
 - [§1 — First-time login (Phases 1–5)](#1--first-time-login-phases-15)
 - [§2 — Staying logged in](#2--staying-logged-in)
@@ -18,6 +19,77 @@
 - [§4 — Istio DestinationRule: `useSourceIp` vs `httpCookie`](#4--istio-destinationrule-usesourceip-vs-httpcookie)
 - [§5 — BFF: what it is and why it is the right model here](#5--bff-what-it-is-and-why-it-is-the-right-model-here)
 - [Appendix — Known code/config drift](#appendix--known-codeconfig-drift)
+
+---
+
+## Intro — OAuth2 with Keycloak: the security lifecycle (DevOps primer)
+
+*New to OAuth2? Start here. This section explains, in operations language, what the auth machinery does and which knobs you own. Everything is expanded with full detail in §0–§5.*
+
+### What OAuth2 / OIDC / Keycloak are, in one breath each
+
+| Term | What it actually is |
+|---|---|
+| **OAuth2** | A protocol where an app never sees the user's password. The app redirects the browser to a trusted **authorization server**, the user logs in *there*, and the app receives short-lived **tokens** it can spend on APIs on the user's behalf |
+| **OIDC** (OpenID Connect) | A thin layer on top of OAuth2 that adds *identity*: an **ID token** that cryptographically states "this is alice, verified at 09:00". OAuth2 = what you may do; OIDC = who you are |
+| **Keycloak** | Our authorization server. It owns the login form, the passwords/SSO sessions, and the token factory. The app is registered in it as a **client** (with a secret only the pod knows) |
+| **BFF** (this app) | *Backend-for-Frontend*: the Spring Boot backend does all of the above **server-side**. The browser never holds a token — only cookies. That is the property that makes this design defensible in a security audit (§5) |
+
+The three tokens Keycloak issues at login, and their operational meaning:
+
+| Token | Lifetime here | Ops meaning |
+|---|---|---|
+| **Access token** | ~5 min | The "cash" spent on downstream API calls. Short on purpose — a stolen one dies in minutes |
+| **Refresh token** | Tied to the SSO session | The "debit card" the backend redeems (server-to-server) for fresh access tokens. Never leaves the pod |
+| **ID token** | Login-time | Proof of identity; also required later to make logout skip Keycloak's "are you sure?" screen (§2C) |
+
+### The lifecycle at a glance
+
+```mermaid
+flowchart TD
+    A["Anonymous browser<br/>(no cookies)"] -->|"first visit"| B["Interactive login<br/>Keycloak form — §1"]
+    B --> C["Active session<br/>JSESSIONID + server-side tokens"]
+    C -->|"access token near expiry<br/>(~every 5 min)"| C2["Silent refresh<br/>3 layers, server-to-server — §2A"]
+    C2 --> C
+    C -->|"idle > 8h — servlet session dies,<br/>Keycloak SSO still alive"| D["Silent re-auth<br/>prompt=none, no UI — §2B"]
+    D -->|"~200–600 ms of redirects"| C
+    D -->|"SSO also dead → login_required"| B
+    C -->|"user clicks logout — §2C"| E["Logged out everywhere<br/>app session + Keycloak SSO killed"]
+    C -->|"pod restart / redeploy"| D
+    E -->|"next visit"| B
+```
+
+Reading it as a DevOps story:
+
+1. **First login (§1):** anonymous request → 302 to Keycloak → user authenticates **at Keycloak** (the app never sees the password) → Keycloak redirects back with a one-time code → the pod swaps code + `client_secret` for the three tokens, stores them **in pod memory**, and gives the browser a session cookie.
+2. **Staying logged in (§2A):** the access token dies every ~5 min by design. Three cooperating refresh layers (per-request filter, on-demand WebClient hook, 60 s scheduler) redeem the refresh token server-to-server so the user never notices. **No browser traffic is involved.**
+3. **Coming back after hours (§2B):** the app's 8 h session may be gone while Keycloak's SSO session (10 h idle) survives. The app retries login with `prompt=none` — Keycloak recognizes its own SSO cookie and issues a fresh code **without rendering any UI**. The user sees a sub-second redirect flash, not a form.
+4. **Logout (§2C):** kills *both* sessions — the app's and Keycloak's SSO — plus the hint cookie. Next visit is a real login form, by design.
+5. **Pod restart / redeploy:** in-memory tokens vanish; users recover through the silent path (3) with one blip. This is an accepted trade-off, not a bug — see D4 in the review's deviations register.
+
+### What the browser holds (and what it never holds)
+
+Only three cookies — `JSESSIONID` (the session), `ea_login_hint` (a "silent login is worth trying" flag), `XSRF-TOKEN` (CSRF double-submit). **No access token, no refresh token, no ID token — ever.** Details in §0.
+
+### The knobs DevOps owns
+
+| Knob | Where | Value / rule | Breaks what if wrong |
+|---|---|---|---|
+| `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` / `KEYCLOAK_ISSUER_URI` | Pod env vars | Per environment | Startup / all logins |
+| `DOWNSTREAM_API_URL`, `THIRD_PARTY_API_URL` | Pod env vars | Per environment | Backend API calls |
+| Servlet session timeout | `application.yml` (`server.servlet.session.timeout`) | **8h** | The silent-login guarantee (next row) |
+| SSO Session Idle | Keycloak realm | **10h — MUST stay ≥ the 8h above** | "Idle then return" shows the login form instead of being silent |
+| SSO Session Max | Keycloak realm | 12–14h (longest workday) | Active users get kicked mid-work when it lapses |
+| Access Token Lifespan | Keycloak realm | ~5 min | Longer = bigger stolen-token window; shorter = more refresh traffic |
+| Revoke Refresh Token | Keycloak realm | **OFF** (deliberate — see review D1) | ON causes racing refreshes → random logouts |
+| Valid Redirect URIs / Post Logout Redirect URIs | Keycloak client | Exact URLs per env | Login / logout redirect rejected by Keycloak |
+| Istio `DestinationRule` `consistentHash` | Mesh config | **Load-bearing — never remove** (verify per `docs/istio-stickiness.md`) | Intermittent bare 401s and broken API calls with >1 replica |
+
+Full realm settings: `docs/keycloak-realm-checklist.md`. Mesh dependency: `docs/istio-stickiness.md`.
+
+### Known gaps and accepted trade-offs
+
+This design was reviewed against RFC 9700 and the IETF browser-based-apps BCP on 2026-07-09. The findings — one High (forwarded-headers config behind Istio TLS termination), six Mediums, and the accepted-deviations register (no token rotation, no back-channel logout, in-memory state + stickiness) — live in `docs/reviews/2026-07-09-spring-oidc-oauth2-review.md`. Read its Appendix A before changing any proxy, domain, or Keycloak topology: several safety properties are conditional on environment facts only ops can confirm.
 
 ---
 
