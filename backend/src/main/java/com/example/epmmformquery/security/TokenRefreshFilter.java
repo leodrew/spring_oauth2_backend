@@ -6,16 +6,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.client.ClientAuthorizationException;
 import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
+import org.springframework.security.oauth2.core.OAuth2ErrorCodes;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 
 /**
  * Runs after SecurityContextHolderFilter on every request. If the user is
@@ -29,10 +32,13 @@ import jakarta.servlet.http.HttpServletResponse;
  * used outside the context of a HttpServletRequest." HttpServletRequest is
  * therefore NOT passed as a context attribute — that manager doesn't use it.
  *
- * Failures here are NOT fatal — we log and let the request proceed. If the
- * refresh token is truly dead, downstream API calls will get 401 and the SPA
- * can react (typically by redirecting to /oauth2/authorization/keycloak,
- * which kicks off Scenario B silent re-auth).
+ * Failure handling (spec §5.3 + review F10):
+ *   - invalid_grant (refresh token dead — revocation, SSO Session Max): the
+ *     current session is invalidated and the SecurityContext cleared, so the
+ *     request re-enters the auth flow — silent re-auth while Keycloak SSO is
+ *     alive, 401 for /rs/** XHRs (F2 entry point).
+ *   - anything else (network blip, Keycloak 5xx): log and let the request
+ *     proceed with the existing (possibly stale) token; retry next request.
  */
 public class TokenRefreshFilter extends OncePerRequestFilter {
 
@@ -62,6 +68,25 @@ public class TokenRefreshFilter extends OncePerRequestFilter {
                 if (client != null && log.isTraceEnabled()) {
                     log.trace("Token state for {}: expires_at={}",
                             oauth.getName(), client.getAccessToken().getExpiresAt());
+                }
+            } catch (ClientAuthorizationException ex) {
+                if (OAuth2ErrorCodes.INVALID_GRANT.equals(ex.getError().getErrorCode())) {
+                    // F10: the refresh token is dead (IdP-side revocation or
+                    // SSO Session Max). Don't let this session live on as an
+                    // authenticated zombie — invalidate it and let the request
+                    // re-enter the auth flow: silent re-auth for pages, 401 for
+                    // /rs/** (F2 entry point). The manager's failure handler
+                    // has already removed the stored authorized client.
+                    log.warn("Refresh token dead for {} (invalid_grant); invalidating session for re-auth.",
+                            oauth.getName());
+                    HttpSession session = request.getSession(false);
+                    if (session != null) {
+                        session.invalidate();
+                    }
+                    SecurityContextHolder.clearContext();
+                } else {
+                    log.warn("Token refresh failed for {} ({}); keeping session, will retry.",
+                            oauth.getName(), ex.getError().getErrorCode());
                 }
             } catch (Exception ex) {
                 log.warn("Token refresh failed for {}: {}", oauth.getName(), ex.getMessage());

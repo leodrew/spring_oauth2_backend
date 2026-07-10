@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -14,6 +15,9 @@ import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
+import org.springframework.security.web.util.matcher.AnyRequestMatcher;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
@@ -29,6 +33,8 @@ import com.example.epmmformquery.security.SilentAuthFailureHandler;
 import com.example.epmmformquery.security.SilentAuthRequestResolver;
 import com.example.epmmformquery.security.SpaCsrfTokenRequestHandler;
 import com.example.epmmformquery.security.TokenRefreshFilter;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 /**
  * Security configuration with hybrid token refresh and silent re-authentication.
@@ -160,9 +166,37 @@ public class SecurityConfig {
 
             .sessionManagement(s -> s
                 .maximumSessions(-1)
-                .sessionRegistry(sessionRegistry))
+                .sessionRegistry(sessionRegistry)
+                // Sessions expired by ScheduledTokenRefreshTask (dead refresh
+                // token, F10): XHRs get 401 (same contract as the entry point
+                // below); page navigations re-request the same URL, which
+                // re-enters the auth flow — silent while Keycloak SSO is alive.
+                .expiredSessionStrategy(event -> {
+                    HttpServletRequest req = event.getRequest();
+                    if (req.getRequestURI().startsWith(contextPrefix + "/rs/")) {
+                        event.getResponse().sendError(HttpStatus.UNAUTHORIZED.value());
+                    } else {
+                        String query = req.getQueryString();
+                        event.getResponse().sendRedirect(
+                                req.getRequestURI() + (query != null ? "?" + query : ""));
+                    }
+                }))
 
-            .exceptionHandling(e -> e.accessDeniedPage(deniedPageUrl))
+            // XHRs from the SPA must see a clean 401 when the session is gone —
+            // the oauth2Login default 302-to-Keycloak is unfollowable by fetch()
+            // ("CORS on 302", review F2). Browser navigations keep the redirect,
+            // which is what makes silent re-auth work. The explicit any-request
+            // mapping is required: once a custom mapping exists, unmatched
+            // requests would otherwise fall back to the FIRST-registered entry
+            // point (the 401), turning every page navigation into a 401.
+            .exceptionHandling(e -> e
+                .accessDeniedPage(deniedPageUrl)
+                .defaultAuthenticationEntryPointFor(
+                        new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED),
+                        PathPatternRequestMatcher.withDefaults().matcher(contextPrefix + "/rs/**"))
+                .defaultAuthenticationEntryPointFor(
+                        new LoginUrlAuthenticationEntryPoint(authBaseUri + "/keycloak"),
+                        AnyRequestMatcher.INSTANCE))
 
             .addFilterAfter(securityLoggingFilter, SecurityContextHolderFilter.class)
             .addFilterAfter(tokenRefreshFilter,    SecurityContextHolderFilter.class)

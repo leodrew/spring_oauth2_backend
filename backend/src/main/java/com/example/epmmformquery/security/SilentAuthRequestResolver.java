@@ -6,6 +6,7 @@ import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizationRequestResolver;
+import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestCustomizers;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.stereotype.Component;
@@ -38,9 +39,17 @@ public class SilentAuthRequestResolver implements OAuth2AuthorizationRequestReso
             @Value("${app.context-prefix:}") String contextPrefix,
             @Value("${app.silent-auth.hint-cookie-name:ea_login_hint}") String hintCookieName) {
 
-        this.delegate = new DefaultOAuth2AuthorizationRequestResolver(
-                clientRegistrationRepository,
-                contextPrefix + "/oauth2/authorization");
+        DefaultOAuth2AuthorizationRequestResolver defaultResolver =
+                new DefaultOAuth2AuthorizationRequestResolver(
+                        clientRegistrationRepository,
+                        contextPrefix + "/oauth2/authorization");
+        // PKCE (S256) on every authorization request — BBA MUST for the BFF
+        // pattern even with a confidential client. Applied on the delegate so
+        // silent (prompt=none) requests carry it too; customize() below
+        // preserves the code_challenge params and code_verifier attribute.
+        defaultResolver.setAuthorizationRequestCustomizer(
+                OAuth2AuthorizationRequestCustomizers.withPkce());
+        this.delegate = defaultResolver;
         this.hintCookieName = hintCookieName;
     }
 

@@ -33,6 +33,7 @@ class ScheduledTokenRefreshTaskTest {
     ScheduledTokenRefreshTask task;
     OAuth2User user;
     OAuth2AuthorizedClient expiringClient;
+    SessionInformation liveSession;
 
     @BeforeEach
     void setUp() {
@@ -52,9 +53,10 @@ class ScheduledTokenRefreshTaskTest {
                 new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER, "tok",
                         Instant.now().minusSeconds(600), Instant.now().plusSeconds(10)));
 
+        liveSession = mock(SessionInformation.class);
         when(sessionRegistry.getAllPrincipals()).thenReturn(List.of(user));
         when(sessionRegistry.getAllSessions(user, false))
-                .thenReturn(List.of(mock(SessionInformation.class)));
+                .thenReturn(List.of(liveSession));
         when(clientService.loadAuthorizedClient("keycloak", "leo")).thenReturn(expiringClient);
     }
 
@@ -66,6 +68,28 @@ class ScheduledTokenRefreshTaskTest {
         task.refreshExpiringTokens();
 
         verify(clientService).removeAuthorizedClient("keycloak", "leo");
+    }
+
+    @Test
+    void invalidGrantExpiresTheUsersSessions() {
+        // F10: IdP-side revocation must not leave an authenticated zombie
+        // session behind — this is the compensating control for D2.
+        when(clientManager.authorize(any())).thenThrow(new ClientAuthorizationException(
+                new OAuth2Error("invalid_grant", "refresh token expired", null), "keycloak"));
+
+        task.refreshExpiringTokens();
+
+        verify(liveSession).expireNow();
+    }
+
+    @Test
+    void transientOAuthErrorKeepsSessionsAlive() {
+        when(clientManager.authorize(any())).thenThrow(new ClientAuthorizationException(
+                new OAuth2Error("server_error", "kc 502", null), "keycloak"));
+
+        task.refreshExpiringTokens();
+
+        verify(liveSession, never()).expireNow();
     }
 
     @Test

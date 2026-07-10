@@ -528,7 +528,7 @@ Key mechanism to keep in mind: while a servlet session is alive, the scheduler (
 | b | Idle < 8h (servlet session alive) | [§2A layer 3]: scheduler keeps refreshing; session cookie valid on return | **No** |
 | c | Idle > 8h, Keycloak SSO still alive | [§2B B1]: dead session → saved request → `prompt=none` → silent code → URL replayed | **No** (302 "flash") |
 | d | Idle > 8h AND SSO Idle lapsed | [§2B B2]: `login_required` → hint cleared → interactive | **Yes** |
-| e | SSO Session Max reached mid-work | Refresh fails `invalid_grant` → scheduler drops client → API calls fail → next full redirect | **Yes** — preceded by a window of broken API calls; unsaved SPA state lost |
+| e | SSO Session Max reached mid-work | Refresh fails `invalid_grant` → scheduler drops tokens **and expires the user's sessions** (≤ ~1 tick, review F10) → next request re-enters auth | **Yes** — within ~2 min of the ceiling; unsaved SPA state lost |
 | f | Single pod restart / redeploy | In-memory state gone → row (c) silent re-auth if SSO alive | **No** (one blip; in-flight XHRs fail once) |
 | g | Multi-pod, stickiness broken | [§4] | **No form — worse:** intermittent bare 401 pages and broken API calls |
 | h | 2 tabs + scheduler refresh race | Rotation OFF (required): shared refresh token, no race | **No** (transient errors if rotation is ever turned ON) |
@@ -539,6 +539,8 @@ Key mechanism to keep in mind: while a servlet session is alive, the scheduler (
 | m | New browser / device / cleared cookies | No hint cookie → [§1] interactive flow | **Yes** (expected) |
 
 **One-line summary:** on healthy infrastructure the form appears only on first visit/new device (m), explicit logout (i), idle longer than servlet 8h **plus** SSO Idle (d), hitting the SSO Session Max ceiling (e/l), or Keycloak losing its sessions (j). Everything else is silent.
+
+**SPA contract for rows c/e/f (review F2):** when the servlet session is dead or expired, `/rs/**` XHRs receive a clean **401** (not a 302 to Keycloak, which `fetch()` cannot follow). On a 401 the SPA must do a top-level navigation to its current route — `window.location.assign(window.location.href)` — which re-enters the auth flow: silent (`prompt=none`) while Keycloak SSO is alive, interactive otherwise. Browser navigations still get the normal 302.
 
 **Documented trade-off:** because the scheduler keeps SSO alive as long as any servlet session exists, *SSO Session Idle is **not** an idle-logout security control* in this design. An abandoned open browser stays logged in until SSO Session Max. If the security team needs idle logout, it must be enforced elsewhere (e.g. SPA inactivity timer that calls `/logout`).
 

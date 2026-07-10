@@ -47,6 +47,14 @@ class SecuritySmokeTest {
     }
 
     @Test
+    void unauthenticatedApiCallGets401NotARedirect() throws Exception {
+        // F2 contract: /rs/** XHRs must be able to detect auth expiry — a 302
+        // to Keycloak is unfollowable by fetch() ("CORS on 302")
+        mockMvc.perform(get("/gui_epmmFormQuery/rs/gui/protected-data"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void logoutEndpointIsRoutedViaGet() throws Exception {
         mockMvc.perform(get("/gui_epmmFormQuery/logout").with(oauth2Login()))
                 .andExpect(status().is3xxRedirection());

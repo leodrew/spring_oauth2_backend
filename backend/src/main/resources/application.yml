@@ -33,7 +33,12 @@ app:
     base-url: ${THIRD_PARTY_API_URL:https://partner.example.com}
 
   # Keycloak URLs -----------------------------------------------------------
-  post-logout-redirect-uri: https://myapp.example.com${app.context-prefix}/page/logged-out
+  # {baseUrl} is resolved per request by OidcClientInitiatedLogoutSuccessHandler
+  # (correct per environment now that forward-headers-strategy is set). Override
+  # with POST_LOGOUT_REDIRECT_URI if an environment needs a fixed value. The
+  # resolved URL must appear in the Keycloak client's Valid Post Logout Redirect
+  # URIs for that environment (docs/keycloak-realm-checklist.md).
+  post-logout-redirect-uri: ${POST_LOGOUT_REDIRECT_URI:{baseUrl}${app.context-prefix}/page/logged-out}
 
   # Optional ----------------------------------------------------------------
   privilege:

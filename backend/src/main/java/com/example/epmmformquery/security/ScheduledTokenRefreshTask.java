@@ -10,6 +10,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.session.SessionInformation;
 import org.springframework.security.core.session.SessionRegistry;
 import org.springframework.security.oauth2.client.ClientAuthorizationException;
 import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
@@ -101,8 +102,14 @@ public class ScheduledTokenRefreshTask {
             } catch (ClientAuthorizationException ex) {
                 failed++;
                 if (OAuth2ErrorCodes.INVALID_GRANT.equals(ex.getError().getErrorCode())) {
-                    log.warn("Refresh token invalid for {} (invalid_grant); removing authorized client — user will silently re-auth.", name);
+                    log.warn("Refresh token invalid for {} (invalid_grant); removing authorized client and expiring sessions — user will silently re-auth.", name);
                     clientService.removeAuthorizedClient(REGISTRATION_ID, name);
+                    // F10: the IdP has revoked — don't leave an authenticated
+                    // zombie session behind for up to 8h. Expiring here means
+                    // revocation propagates in <= one tick (~2 min) and is the
+                    // compensating control for skipping back-channel logout (D2).
+                    sessionRegistry.getAllSessions(principal, false)
+                            .forEach(SessionInformation::expireNow);
                 } else {
                     log.warn("OAuth2 error refreshing for {} ({}); keeping tokens for retry next tick.",
                             name, ex.getError().getErrorCode());
