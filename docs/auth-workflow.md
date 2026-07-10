@@ -2,7 +2,7 @@
 
 > **Supersedes** `spring_first_login_workflow.md` and `spring_silent_auth_workflow.md` (both described the older "v4" iteration: Spring Boot 3.4.5, `AntPathRequestMatcher`, `CustomLogoutSuccessHandler`, CSRF-exempt `/rs/**`). This document is traced from the **current `backend/` source tree** — Spring Boot 3.5.x, Spring Security 6.5.x, Java 17, Keycloak OIDC, React-Vite SPA, Kubernetes + Istio.
 >
-> Companion docs: `docs/keycloak-realm-checklist.md` (realm settings), `docs/istio-stickiness.md` (mesh dependency, summarized in §4 here), `docs/reviews/2026-07-09-spring-oidc-oauth2-review.md` (best-practices review: known gaps + accepted deviations), `pmc-epmmformquerygui-COMPLETE.md` (full narrative reference).
+> Companion docs: `docs/keycloak-realm-checklist.md` (realm settings), `docs/istio-stickiness.md` (mesh dependency, summarized in §4 here), `docs/reviews/2026-07-09-spring-oidc-oauth2-review.md` (best-practices review: known gaps + accepted deviations), `pmc-epmmformquerygui-COMPLETE.md` (full narrative reference), `docs/oauth2-migration-intro.md` (Traditional-Chinese team intro: OAuth2 basics + the Java 8 adapter → `oauth2Login` migration story).
 
 ---
 

@@ -6,9 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The Maven project now lives in **`backend/`** — a real, compilable Spring Boot source tree (Spring Boot 3.5.x / Spring Security 6.5.x / Java 17 / Keycloak OIDC / React-Vite SPA / Kubernetes) for the **pmc-epmmformquerygui** project. It was extracted from the reference doc's embedded code blocks in Task 1 of `docs/superpowers/plans/2026-07-04-keycloak-backend-hardening.md`; `backend/` — not the markdown — is now the source of truth for code changes.
 
-Documentation responsibilities are split three ways:
+Documentation responsibilities are split across these docs:
 - `pmc-epmmformquerygui-COMPLETE.md` (repo root) — the narrative/teaching reference document: auth-flow diagrams, setup steps, gotchas, and (§17) the full "when does the user see the login form again?" matrix. Read it to understand *why* the code is shaped this way.
 - `docs/auth-workflow.md` — the auth-flow walkthrough traced from the current `backend/` code: first login, token refresh, silent re-auth, the "when does the login form appear?" matrix, DestinationRule `useSourceIp` vs `httpCookie`, and the BFF rationale. Supersedes the old root-level `spring_first_login_workflow.md` / `spring_silent_auth_workflow.md` (deleted).
+- `docs/oauth2-migration-intro.md` — team-facing intro in Traditional Chinese (deliberately; all other docs are English): OAuth2/Keycloak basics, SPA-vs-BFF trade-offs, and the Java 8 Keycloak-adapter → Java 17 Spring Security `oauth2Login` migration story with Mermaid sequence flows.
 - `docs/keycloak-realm-checklist.md` — the concrete realm/client setting values for the production Keycloak realm.
 - `docs/istio-stickiness.md` — the Istio mesh dependency that multi-pod correctness relies on (see "Critical constraints" below).
 
