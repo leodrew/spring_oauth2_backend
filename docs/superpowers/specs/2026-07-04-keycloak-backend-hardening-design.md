@@ -60,7 +60,7 @@ The production mesh routes each user to a consistent pod via `DestinationRule` �
 3. **Per-pod schedulers** each refresh their own users' tokens. Correct with refresh-token rotation OFF (§7); would race if rotation is ever enabled.
 4. **`useSourceIp` hashing is only as sticky as the source IP.** Traffic arriving via the Istio ingress gateway is hashed on the IP the sidecar sees — commonly the gateway pod's IP: one gateway replica funnels all its users to a single app pod (hotspot), and multiple gateway replicas can send the SAME user to DIFFERENT app pods (stickiness silently broken). Corporate-NAT users share one hash; mobile users change IP mid-session. **Recommendation (Task 10 deliverable): switch the app's DestinationRule to `consistentHash.httpCookie` (Envoy-issued affinity cookie), which is immune to all of these.**
 
-**Trigger conditions for revisiting (see Appendix A):** stickiness must be removed, zero-blip rolling deploys become a requirement, rotation must be enabled, or user counts make per-pod refresh load a problem.
+**Trigger conditions for revisiting (see Appendix A):** stickiness must be removed, zero-blip rolling deploys become a requirement, rotation must be enabled, user counts make per-pod refresh load a problem, or OIDC back-channel logout must be adopted (the logout token carries no pod affinity, so it needs externalized sessions first — review deviation D2).
 
 ## 5. Bug fixes (live defects — do these first, independent of §4)
 

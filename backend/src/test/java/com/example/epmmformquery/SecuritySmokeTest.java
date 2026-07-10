@@ -55,6 +55,29 @@ class SecuritySmokeTest {
     }
 
     @Test
+    void cspHeaderIsEmittedReportOnly() throws Exception {
+        // F3b: report-only until the SPA runs clean, then flipped to enforce
+        mockMvc.perform(get("/gui_epmmFormQuery/rs/gui/ping"))
+                .andExpect(header().string("Content-Security-Policy-Report-Only",
+                        containsString("default-src 'self'")));
+    }
+
+    @Test
+    void hstsIsEmittedOnSecureRequests() throws Exception {
+        mockMvc.perform(get("/gui_epmmFormQuery/rs/gui/ping").secure(true))
+                .andExpect(header().string("Strict-Transport-Security",
+                        containsString("max-age=31536000")));
+    }
+
+    @Test
+    void crossOriginRequestGetsNoCorsGrant() throws Exception {
+        // F4: same-origin BFF — no CORS config means no Access-Control-* grants
+        mockMvc.perform(get("/gui_epmmFormQuery/rs/gui/ping")
+                        .header("Origin", "https://evil.example.com"))
+                .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
+    }
+
+    @Test
     void logoutEndpointIsRoutedViaGet() throws Exception {
         mockMvc.perform(get("/gui_epmmFormQuery/logout").with(oauth2Login()))
                 .andExpect(status().is3xxRedirection());

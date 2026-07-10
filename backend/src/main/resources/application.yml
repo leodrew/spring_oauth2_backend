@@ -40,9 +40,25 @@ app:
   # URIs for that environment (docs/keycloak-realm-checklist.md).
   post-logout-redirect-uri: ${POST_LOGOUT_REDIRECT_URI:{baseUrl}${app.context-prefix}/page/logged-out}
 
+  # Security headers ---------------------------------------------------------
+  security:
+    # CSP for the hosted Vite SPA (review F3b). Tune connect-src/script-src if
+    # the bundle needs more; keep report-only until the SPA console runs clean,
+    # then flip csp-report-only to false to enforce.
+    csp-policy: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    csp-report-only: true
+    # When non-empty, every non-permitAll request additionally requires this
+    # Keycloak realm role (mapped to ROLE_<name>); empty = any authenticated
+    # realm user (review F17 interim guard). Requires the realm_access.roles
+    # claim (see docs/keycloak-realm-checklist.md).
+    required-role: ""
+
   # Optional ----------------------------------------------------------------
   privilege:
     enabled: false                # set true to activate PrivilegeCheckFilter
+                                  # NOTE: enabled=true currently DENIES all
+                                  # requests (503) — the LDAP logic is a stub;
+                                  # fail closed, not silently open (review F17)
 
 # Server settings — context-path NOT set on purpose (v4 design)
 server:
@@ -76,7 +92,13 @@ spring:
             redirect-uri: "{baseUrl}/gui_epmmFormQuery/login/oauth2/code/{registrationId}"
         provider:
           keycloak:
-            user-name-attribute: preferred_username
+            # sub, not preferred_username: Authentication.getName() keys the
+            # token store (InMemoryOAuth2AuthorizedClientService), and OIDC
+            # forbids relying on preferred_username being stable or unique —
+            # a recycled username would resolve the previous user's tokens
+            # (review F15). UserInfoService still exposes preferred_username
+            # as the display/business username.
+            user-name-attribute: sub
 
 # Logging ---------------------------------------------------------------------
 logging:

@@ -15,7 +15,7 @@ spring:
             token-uri: http://localhost:9999/realms/test/protocol/openid-connect/token
             jwk-set-uri: http://localhost:9999/realms/test/protocol/openid-connect/certs
             user-info-uri: http://localhost:9999/realms/test/protocol/openid-connect/userinfo
-            user-name-attribute: preferred_username
+            user-name-attribute: sub    # must match prod: token store keys on sub (F15)
 
 app:
   post-logout-redirect-uri: http://localhost:8080/gui_epmmFormQuery/page/logged-out

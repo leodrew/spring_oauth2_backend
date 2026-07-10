@@ -5,6 +5,8 @@
 > **Baselines (pinned):** [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html) *Best Current Practice for OAuth 2.0 Security* (BCP 240, Jan 2025) · [draft-ietf-oauth-browser-based-apps-**27**](https://datatracker.ietf.org/doc/draft-ietf-oauth-browser-based-apps/) *OAuth 2.0 for Browser-Based Applications* (2026-07-06, in RFC Editor queue — cited below as "BBA-27") · Spring Security 6.5 reference documentation.
 >
 > Companion docs: `docs/auth-workflow.md` (flow trace), `docs/keycloak-realm-checklist.md` (realm settings), `docs/istio-stickiness.md` (mesh dependency), `docs/superpowers/specs/2026-07-04-keycloak-backend-hardening-design.md` (previous hardening round — "the spec").
+>
+> **Remediation status (2026-07-10):** the §4 code-side fix plan was executed on branch `remediation/oauth2-review` (see git history). F18 remains deferred pending Appendix A7 (partner trust domain); F5 was recorded as deviation D7; the Appendix A ops confirmations are still outstanding.
 
 ---
 
@@ -328,6 +330,7 @@ Deviations are *deliberate* departures from an authority, kept honest with ratio
 | D4 | **In-memory sessions + tokens, per pod** (`InMemoryOAuth2AuthorizedClientService`) | BBA-27 availability guidance | Documented: Istio `consistentHash` DestinationRule is the replication mechanism (`docs/istio-stickiness.md`) | DestinationRule verified per env; silent re-auth recovers restarts | Any spec §4 trigger (stickiness removal, zero-blip deploys, rotation, load) |
 | D5 | **Unlimited concurrent sessions** (`maximumSessions(-1)`) | Session-fixation/hardening guides | Registry exists only to feed the scheduler; concurrency limits would break multi-tab UX | Sessions are cookie-bound; tokens principal-keyed (by design) | Security team mandates device limits |
 | D6 | **No `server.servlet.context-path`** (prefix-everywhere) | Convention only | Istio VirtualService routes `/gui_epmmFormQuery/*`; explicit prefixes keep Security patterns/controllers/resource handler aligned (`docs/auth-workflow.md` §0) | Consistent `contextPrefix + …` construction; smoke tests | None — permanent design choice |
+| D7 (F5) *(added 2026-07-10)* | **Logout is a CSRF-exempt GET** | Spring Security docs (logout SHOULD be POST + CSRF) | RP-initiated logout needs a top-level navigation to follow the 302 to Keycloak's `end_session`; `fetch()` cannot. Cross-site forced logout is a nuisance/DoS primitive (kills the whole SSO session) but exposes no data | Session/cookies fully cleared on logout; no state change beyond termination | SPA adopts POST-logout flow (`window.location.assign()` of the returned end-session URL) |
 
 ---
 

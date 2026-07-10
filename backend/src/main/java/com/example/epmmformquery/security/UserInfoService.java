@@ -78,8 +78,11 @@ public class UserInfoService {
         OAuth2User principal = oauth.getPrincipal();
         OidcUser oidc = (principal instanceof OidcUser o) ? o : null;
 
-        String username = oauth.getName();
-        String subject  = oidc != null ? oidc.getSubject() : null;
+        // getName() is the OIDC sub since the token store keys on it (F15);
+        // the friendly business username lives in the preferred_username claim.
+        String preferred = principal.getAttribute("preferred_username");
+        String username  = preferred != null ? preferred : oauth.getName();
+        String subject   = oidc != null ? oidc.getSubject() : null;
         String email    = oidc != null ? oidc.getEmail() : (String) principal.getAttribute("email");
         String name     = oidc != null ? oidc.getFullName() : (String) principal.getAttribute("name");
         String given    = oidc != null ? oidc.getGivenName() : null;

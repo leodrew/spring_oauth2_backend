@@ -10,9 +10,14 @@ import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.authority.mapping.GrantedAuthoritiesMapper;
 import org.springframework.security.core.session.SessionRegistry;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.core.oidc.user.OidcUserAuthority;
+import org.springframework.security.oauth2.core.user.OAuth2UserAuthority;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
@@ -22,7 +27,6 @@ import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
-import org.springframework.web.cors.CorsConfigurationSource;
 
 import com.example.epmmformquery.security.KeycloakLogoutSuccessHandler;
 import com.example.epmmformquery.security.LoginSuccessHandler;
@@ -61,7 +65,6 @@ public class SecurityConfig {
     private final SilentAuthRequestResolver silentAuthRequestResolver;
     private final SilentAuthFailureHandler silentAuthFailureHandler;
     private final SessionRegistry sessionRegistry;
-    private final CorsConfigurationSource corsConfigurationSource;
     private final KeycloakLogoutSuccessHandler keycloakLogoutSuccessHandler;
     private final SecurityLoggingFilter securityLoggingFilter;
     private final PrivilegeCheckFilter privilegeCheckFilter;
@@ -78,12 +81,21 @@ public class SecurityConfig {
     @Value("${app.silent-auth.cookie-secure:true}")
     private boolean hintCookieSecure;
 
+    @Value("${app.security.csp-policy:}")
+    private String cspPolicy;
+
+    @Value("${app.security.csp-report-only:true}")
+    private boolean cspReportOnly;
+
+    /** Empty = any authenticated realm user; non-empty = require ROLE_<name> (F17 interim guard). */
+    @Value("${app.security.required-role:}")
+    private String requiredRole;
+
     public SecurityConfig(OAuth2AuthorizedClientRepository authorizedClientRepository,
                           OAuth2AuthorizedClientManager authorizedClientManager,
                           SilentAuthRequestResolver silentAuthRequestResolver,
                           SilentAuthFailureHandler silentAuthFailureHandler,
                           SessionRegistry sessionRegistry,
-                          CorsConfigurationSource corsConfigurationSource,
                           KeycloakLogoutSuccessHandler keycloakLogoutSuccessHandler,
                           SecurityLoggingFilter securityLoggingFilter,
                           PrivilegeCheckFilter privilegeCheckFilter) {
@@ -92,7 +104,6 @@ public class SecurityConfig {
         this.silentAuthRequestResolver = silentAuthRequestResolver;
         this.silentAuthFailureHandler = silentAuthFailureHandler;
         this.sessionRegistry = sessionRegistry;
-        this.corsConfigurationSource = corsConfigurationSource;
         this.keycloakLogoutSuccessHandler = keycloakLogoutSuccessHandler;
         this.securityLoggingFilter = securityLoggingFilter;
         this.privilegeCheckFilter = privilegeCheckFilter;
@@ -129,19 +140,46 @@ public class SecurityConfig {
         String deniedPageUrl   = contextPrefix + "/page/access-denied";
 
         http
-            .cors(cors -> cors.configurationSource(corsConfigurationSource))
+            // No .cors(): the SPA is same-origin by design (BFF) — credentialed
+            // cross-origin access was review finding F4. If a cross-origin
+            // consumer ever appears, add an explicit enumerated config here.
             .requestCache(c -> c.requestCache(requestCache))
 
-            .authorizeHttpRequests(a -> a
-                .requestMatchers(
+            .authorizeHttpRequests(a -> {
+                a.requestMatchers(
                         "/actuator/health",
                         "/actuator/health/**",
                         "/error",
                         "/favicon.ico",
                         contextPrefix + "/page/**",
                         contextPrefix + "/rs/gui/ping"
-                ).permitAll()
-                .anyRequest().authenticated())
+                ).permitAll();
+                if (requiredRole == null || requiredRole.isBlank()) {
+                    a.anyRequest().authenticated();
+                } else {
+                    // F17 interim guard: "authenticated" in a shared realm means
+                    // every SSO user; the role narrows it to users authorized
+                    // for THIS app (realm_access.roles via the mapper below).
+                    a.anyRequest().hasRole(requiredRole);
+                }
+            })
+
+            // F3b: BFF keeps tokens out of the browser, but XSS in the hosted
+            // SPA could still ride the session cookie — CSP is the remaining
+            // control. HSTS needs F3a (forward-headers) to be emitted at all.
+            .headers(h -> {
+                h.httpStrictTransportSecurity(hsts -> hsts
+                        .maxAgeInSeconds(31536000)
+                        .includeSubDomains(true));
+                if (cspPolicy != null && !cspPolicy.isBlank()) {
+                    h.contentSecurityPolicy(csp -> {
+                        csp.policyDirectives(cspPolicy);
+                        if (cspReportOnly) {
+                            csp.reportOnly();
+                        }
+                    });
+                }
+            })
 
             .oauth2Login(oauth2 -> oauth2
                 .authorizationEndpoint(auth -> auth
@@ -228,5 +266,39 @@ public class SecurityConfig {
         reg.addUrlPatterns("/*");
         reg.setOrder(Ordered.HIGHEST_PRECEDENCE);
         return reg;
+    }
+
+    /**
+     * Maps Keycloak's realm_access.roles claim to ROLE_* authorities at login
+     * (picked up automatically by oauth2Login). Without this, the principal
+     * only carries OIDC_USER/SCOPE_* and the app.security.required-role rule
+     * could never match. UserInfoService's role extraction is unaffected —
+     * it dedupes against the same claim.
+     */
+    @Bean
+    public GrantedAuthoritiesMapper realmRolesAuthoritiesMapper() {
+        return authorities -> {
+            java.util.Set<GrantedAuthority> mapped = new java.util.LinkedHashSet<>(authorities);
+            for (GrantedAuthority authority : authorities) {
+                Object realmAccess = null;
+                if (authority instanceof OidcUserAuthority oidc) {
+                    realmAccess = oidc.getIdToken().getClaims().get("realm_access");
+                    if (realmAccess == null && oidc.getUserInfo() != null) {
+                        realmAccess = oidc.getUserInfo().getClaims().get("realm_access");
+                    }
+                } else if (authority instanceof OAuth2UserAuthority oauth2) {
+                    realmAccess = oauth2.getAttributes().get("realm_access");
+                }
+                if (realmAccess instanceof java.util.Map<?, ?> map
+                        && map.get("roles") instanceof java.util.Collection<?> roles) {
+                    for (Object role : roles) {
+                        if (role instanceof String s && !s.isBlank()) {
+                            mapped.add(new SimpleGrantedAuthority("ROLE_" + s));
+                        }
+                    }
+                }
+            }
+            return mapped;
+        };
     }
 }
