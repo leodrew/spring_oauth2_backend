@@ -42,6 +42,13 @@ app:
 # Server settings — context-path NOT set on purpose (v4 design)
 server:
   port: 8080
+  # LOAD-BEARING behind the TLS-terminating Istio mesh: makes {baseUrl} in the
+  # OAuth2 redirect-uri, request.isSecure(), and HSTS emission honor
+  # X-Forwarded-Proto/-For. Without it Tomcat sees plain HTTP and the redirect
+  # URI can resolve to http:// (exact-match failure at Keycloak). Safe when no
+  # X-Forwarded-* headers arrive (no-op); the pod is only reachable via the
+  # sidecar, so trusting these headers is acceptable. Do not remove.
+  forward-headers-strategy: framework
   servlet:
     session:
       timeout: 8h

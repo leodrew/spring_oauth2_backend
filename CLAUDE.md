@@ -28,6 +28,8 @@ Spring Boot app that hosts a React SPA under `/gui_epmmFormQuery/web/`, authenti
 
 **Deliberate design choice:** `server.servlet.context-path` is NOT set. Every URL carries the `/gui_epmmFormQuery` prefix explicitly, built from `app.context-prefix`. That is why `oauth2Login` sets explicit `authorizationEndpoint.baseUri` and `redirectionEndpoint.baseUri`. Do not "simplify" by introducing a context-path.
 
+**Equally load-bearing:** `server.forward-headers-strategy: framework` in `application.yml`. TLS terminates upstream in the Istio mesh, so without it Tomcat sees plain HTTP — `{baseUrl}` in the redirect-uri resolves to `http://…` (exact-match failure at Keycloak), `isSecure()` is false, and HSTS is never emitted. Do not remove it (review finding F3a).
+
 **Three token-refresh layers share one `OAuth2AuthorizedClientManager`** (config in `TokenRefreshConfig`):
 1. Proactive — `TokenRefreshFilter` on each authenticated request
 2. Reactive — refresh when a WebClient call needs the token

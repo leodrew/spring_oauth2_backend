@@ -77,6 +77,7 @@ Only three cookies — `JSESSIONID` (the session), `ea_login_hint` (a "silent lo
 |---|---|---|---|
 | `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` / `KEYCLOAK_ISSUER_URI` | Pod env vars | Per environment | Startup / all logins |
 | `DOWNSTREAM_API_URL`, `THIRD_PARTY_API_URL` | Pod env vars | Per environment | Backend API calls |
+| `server.forward-headers-strategy` | `application.yml` | **`framework` — load-bearing, never remove** (review F3a) | `{baseUrl}` redirect-uri resolves to `http://` → Keycloak rejects login; `Secure`-cookie logic and HSTS break behind the TLS-terminating mesh |
 | Servlet session timeout | `application.yml` (`server.servlet.session.timeout`) | **8h** | The silent-login guarantee (next row) |
 | SSO Session Idle | Keycloak realm | **10h — MUST stay ≥ the 8h above** | "Idle then return" shows the login form instead of being silent |
 | SSO Session Max | Keycloak realm | 12–14h (longest workday) | Active users get kicked mid-work when it lapses |
