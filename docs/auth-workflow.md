@@ -48,7 +48,7 @@ The three tokens Keycloak issues at login, and their operational meaning:
 ```mermaid
 flowchart TD
     A["Anonymous browser<br/>(no cookies)"] -->|"first visit"| B["Interactive login<br/>Keycloak form — §1"]
-    B --> C["Active session<br/>JSESSIONID + server-side tokens"]
+    B --> C["Active session<br/>__Host-JSESSIONID + server-side tokens"]
     C -->|"access token near expiry<br/>(~every 5 min)"| C2["Silent refresh<br/>3 layers, server-to-server — §2A"]
     C2 --> C
     C -->|"idle > 8h — servlet session dies,<br/>Keycloak SSO still alive"| D["Silent re-auth<br/>prompt=none, no UI — §2B"]
@@ -69,7 +69,7 @@ Reading it as a DevOps story:
 
 ### What the browser holds (and what it never holds)
 
-Only three cookies — `JSESSIONID` (the session), `ea_login_hint` (a "silent login is worth trying" flag), `XSRF-TOKEN` (CSRF double-submit). **No access token, no refresh token, no ID token — ever.** Details in §0.
+Only three cookies — `__Host-JSESSIONID` (the session), `ea_login_hint` (a "silent login is worth trying" flag), `XSRF-TOKEN` (CSRF double-submit). **No access token, no refresh token, no ID token — ever.** Details in §0.
 
 ### The knobs DevOps owns
 
@@ -100,15 +100,15 @@ The backend is a **Backend-for-Frontend (BFF)**: a Spring Boot app that hosts th
 
 | Cookie | Who sets it | Purpose | Lifetime |
 |---|---|---|---|
-| `JSESSIONID` | Tomcat | Servlet session (holds `SecurityContext`) | Session cookie; server-side timeout **8h** |
+| `__Host-JSESSIONID` | Tomcat | Servlet session (holds `SecurityContext`) | Session cookie; server-side timeout **8h** |
 | `ea_login_hint` | `LoginSuccessHandler` | "This browser has logged in before" → enables silent re-auth | **30 days**, `Path=/gui_epmmFormQuery`, HttpOnly, Secure |
-| `XSRF-TOKEN` | `CookieCsrfTokenRepository` | CSRF double-submit token, readable by the SPA's JS | Session cookie |
+| `XSRF-TOKEN` | `CookieCsrfTokenRepository` | CSRF double-submit token, readable by the SPA's JS | Session cookie; `Path=/gui_epmmFormQuery`, `SameSite=Lax` (F8) |
 
 ```mermaid
 flowchart LR
     subgraph Browser
         SPA["React SPA<br/>(served from /gui_epmmFormQuery/web/)"]
-        CK["Cookies:<br/>JSESSIONID · ea_login_hint · XSRF-TOKEN"]
+        CK["Cookies:<br/>__Host-JSESSIONID · ea_login_hint · XSRF-TOKEN"]
     end
 
     subgraph Spring["Spring Boot BFF (per pod)"]
@@ -180,7 +180,7 @@ Do not "simplify" by introducing a context-path — the Istio VirtualService onl
 https://myapp.example.com/gui_epmmFormQuery/web/
 ```
 
-She has no `JSESSIONID`, no `ea_login_hint` cookie, no Keycloak SSO session — and valid credentials.
+She has no `__Host-JSESSIONID`, no `ea_login_hint` cookie, no Keycloak SSO session — and valid credentials.
 
 ```mermaid
 sequenceDiagram
@@ -224,12 +224,12 @@ sequenceDiagram
     FC->>LSH: onAuthenticationSuccess()
     LSH->>U: Set-Cookie: ea_login_hint=1 (30d, Path=/gui_epmmFormQuery)
     LSH->>RC: read saved request
-    LSH-->>U: 302 → /gui_epmmFormQuery/web/ + Set-Cookie: JSESSIONID
+    LSH-->>U: 302 → /gui_epmmFormQuery/web/ + Set-Cookie: __Host-JSESSIONID
     end
 
     rect rgb(235, 255, 255)
     Note over U,WAC: PHASE 5 — Authenticated request lands on the SPA
-    U->>FC: GET /gui_epmmFormQuery/web/ (JSESSIONID)
+    U->>FC: GET /gui_epmmFormQuery/web/ (__Host-JSESSIONID)
     FC->>WAC: authenticated → forward
     WAC-->>U: 200 index.html (SPA fallback, Cache-Control: no-cache)
     Note over U: SPA boots — Alice sees the app
@@ -338,7 +338,7 @@ Why the principal key (not the session) matters — every consumer that knows th
 | `TokenRefreshFilter` (per request) | `loadAuthorizedClient("keycloak", auth.getName())` | Yes — it has the request |
 | WebClient beans (outgoing calls) | shared manager → same key | Unreliable — background threads lack a request context |
 | `ScheduledTokenRefreshTask` (60 s) | iterates `SessionRegistry` principals → same key per user | Impossible — a scheduler has no HTTP session at all |
-| Second tab / second session, same user | different `JSESSIONID`, same `preferred_username` → same entry | No — each session would hold its own token copy |
+| Second tab / second session, same user | different `__Host-JSESSIONID`, same `preferred_username` → same entry | No — each session would hold its own token copy |
 
 The flip side of one shared entry per user: concurrent refreshes from two code paths can race on the same refresh token — one more reason the realm keeps *Revoke Refresh Token: OFF* (§2A).
 
@@ -415,7 +415,7 @@ It knows who is logged in via the `SessionRegistry` (populated because `Security
 
 ### §2B — Silent re-authentication (`prompt=none`)
 
-**Scenario B1 — the happy path.** Alice closed her browser at 12:00 (session cookie `JSESSIONID` deleted on close), and returns at 14:30. Her `ea_login_hint` cookie (30 d) is still there; Keycloak's SSO session is still alive.
+**Scenario B1 — the happy path.** Alice closed her browser at 12:00 (session cookie `__Host-JSESSIONID` deleted on close), and returns at 14:30. Her `ea_login_hint` cookie (30 d) is still there; Keycloak's SSO session is still alive.
 
 ```mermaid
 sequenceDiagram
@@ -426,7 +426,7 @@ sequenceDiagram
     participant K as Keycloak
     participant LSH as LoginSuccessHandler
 
-    U->>FC: GET /gui_epmmFormQuery/web/  (ea_login_hint=1, no JSESSIONID)
+    U->>FC: GET /gui_epmmFormQuery/web/  (ea_login_hint=1, no __Host-JSESSIONID)
     FC-->>U: 302 → /oauth2/authorization/keycloak  (URL saved in new session)
     U->>FC: GET /gui_epmmFormQuery/oauth2/authorization/keycloak
     FC->>SAR: resolve()
@@ -474,13 +474,13 @@ There are **two independent sessions**, and in scenario B1 only one of them died
 
 | Cookie | Sent to | Proves | Lifetime |
 |---|---|---|---|
-| `JSESSIONID` | app domain (`myapp.example.com`) | servlet session with the BFF | 8 h idle — **this is what died** |
+| `__Host-JSESSIONID` | app domain (`myapp.example.com`) | servlet session with the BFF | 8 h idle — **this is what died** |
 | `KEYCLOAK_IDENTITY` (+ `KEYCLOAK_SESSION`, `AUTH_SESSION_ID`) | Keycloak domain only | live SSO session inside Keycloak itself | SSO Idle 10 h / SSO Max — **this is still alive** |
 | `ea_login_hint` | app domain | nothing — just "this browser logged in before, silent is worth trying" | 30 d |
 
-`prompt=none` does **not** skip authentication. Per the OIDC spec it means: *authenticate using only what the browser already carries, and if any UI would be needed, return an error instead of rendering it.* What the browser still carries — for the Keycloak domain — is `KEYCLOAK_IDENTITY`: a signed token referencing Keycloak's own server-side SSO session. Keycloak validates it, finds the SSO session within its idle window, and issues a fresh authorization code with zero UI. The user's authentication never lived in our app; losing `JSESSIONID` only lost the *app's copy* of the login. This is the same mechanism that gives any second OIDC app instant SSO — here the "second app" is our own app coming back after its session died.
+`prompt=none` does **not** skip authentication. Per the OIDC spec it means: *authenticate using only what the browser already carries, and if any UI would be needed, return an error instead of rendering it.* What the browser still carries — for the Keycloak domain — is `KEYCLOAK_IDENTITY`: a signed token referencing Keycloak's own server-side SSO session. Keycloak validates it, finds the SSO session within its idle window, and issues a fresh authorization code with zero UI. The user's authentication never lived in our app; losing `__Host-JSESSIONID` only lost the *app's copy* of the login. This is the same mechanism that gives any second OIDC app instant SSO — here the "second app" is our own app coming back after its session died.
 
-The realm rule *SSO Session Idle (10 h) ≥ servlet timeout (8 h)* exists precisely so that whenever `JSESSIONID` expires, `KEYCLOAK_IDENTITY` is still guaranteed valid — the silent path can't miss (and §2A's scheduler keeps resetting the idle timer while any session lives).
+The realm rule *SSO Session Idle (10 h) ≥ servlet timeout (8 h)* exists precisely so that whenever `__Host-JSESSIONID` expires, `KEYCLOAK_IDENTITY` is still guaranteed valid — the silent path can't miss (and §2A's scheduler keeps resetting the idle timer while any session lives).
 
 On the wire:
 
@@ -509,7 +509,7 @@ Location: https://myapp.example.com/gui_epmmFormQuery/login/oauth2/code/keycloak
 
 ### §2C — Explicit logout
 
-`GET /gui_epmmFormQuery/logout` (matched by `PathPatternRequestMatcher` — `AntPathRequestMatcher` is removed in Spring Security 7; the logout URL is the single CSRF exemption). Spring invalidates the session, clears authentication, deletes `JSESSIONID`, then calls **`KeycloakLogoutSuccessHandler`**, which extends Spring's `OidcClientInitiatedLogoutSuccessHandler`:
+`GET /gui_epmmFormQuery/logout` (matched by `PathPatternRequestMatcher` — `AntPathRequestMatcher` is removed in Spring Security 7; the logout URL is the single CSRF exemption). Spring invalidates the session, clears authentication, deletes `__Host-JSESSIONID`, then calls **`KeycloakLogoutSuccessHandler`**, which extends Spring's `OidcClientInitiatedLogoutSuccessHandler`:
 
 1. Clears `ea_login_hint` — otherwise the next visit would silently re-login, making logout look broken.
 2. Delegates to `super`, which builds the OIDC RP-initiated logout URL to Keycloak's `end_session` endpoint **with `id_token_hint` and `client_id`** (this is why we extend the framework handler rather than hand-building the URL — Keycloak requires these to skip its "are you sure?" screen and to validate `post_logout_redirect_uri`), redirecting to `app.post-logout-redirect-uri` → the public `/page/logged-out` page.
@@ -668,7 +668,8 @@ Small honesty notes from tracing the current source; none affects the flows abov
 | `/gui_epmmFormQuery/rs/gui/ping` | In the permitAll list, but **no controller implements it** yet |
 | SPA user-info endpoint | Does not exist yet: `UserInfoService`/`UserInfo` are consumed server-side only (`DownstreamApiClient`, `ThirdPartyApiClient`). The javadoc's `@GetMapping("/rs/some-endpoint")` is illustrative |
 | `UserInfo` javadoc | References `UserInfoService.fetchFreshFromUserInfoEndpoint()`, which does not exist |
-| `ea_login_hint` SameSite | Not set explicitly (plain `jakarta.servlet.http.Cookie`); the `JSESSIONID` cookie gets `SameSite=lax` from server config, the hint cookie relies on browser defaults (effectively `Lax`) |
+| `ea_login_hint` SameSite | ~~Not set explicitly~~ **Fixed 2026-07-10 (review F6):** all three cookie sites now set `SameSite=Lax` explicitly via `setAttribute` |
+| Session cookie name | `__Host-JSESSIONID` since the 2026-07-10 remediation (review F8): browser-enforced Secure + Path=/ + no Domain. Plain-HTTP local dev must override the name (see `application.yml` comment). Istio affinity is unaffected — the recommended `httpCookie` policy uses Envoy's own `epmm-affinity` cookie |
 
 ---
 

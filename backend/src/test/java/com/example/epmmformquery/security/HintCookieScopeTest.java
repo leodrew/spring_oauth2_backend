@@ -27,5 +27,8 @@ class HintCookieScopeTest {
         assertThat(c.getPath()).isEqualTo("/gui_epmmFormQuery");
         assertThat(c.getSecure()).isTrue();
         assertThat(c.isHttpOnly()).isTrue();
+        // explicit SameSite (review F6) — the servlet session.cookie property
+        // only covers the session cookie, not manually built ones
+        assertThat(c.getAttribute("SameSite")).isEqualTo("Lax");
     }
 }

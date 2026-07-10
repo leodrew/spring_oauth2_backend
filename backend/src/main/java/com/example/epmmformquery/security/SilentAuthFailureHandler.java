@@ -72,6 +72,7 @@ public class SilentAuthFailureHandler implements AuthenticationFailureHandler {
         c.setPath(contextPrefix);
         c.setHttpOnly(true);
         c.setSecure(cookieSecure);
+        c.setAttribute("SameSite", "Lax");
         response.addCookie(c);
     }
 }

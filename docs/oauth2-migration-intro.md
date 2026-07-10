@@ -172,7 +172,7 @@ spring:
 
 - **三層 token refresh**(Flow B)——確保 access token 永遠是新鮮的
 - **Silent re-auth**(Flow C)——session 過期也不打擾使用者
-- **BFF 架構**——token 永遠不進瀏覽器;瀏覽器只有三顆 cookie(`JSESSIONID`、`ea_login_hint`、`XSRF-TOKEN`),沒有任何一顆是 token
+- **BFF 架構**——token 永遠不進瀏覽器;瀏覽器只有三顆 cookie(`__Host-JSESSIONID`、`ea_login_hint`、`XSRF-TOKEN`),沒有任何一顆是 token
 
 接下來用三張循序圖走完整個安全機制。這是本文的重點:看懂這三條流程,就看懂了這個專案。
 
@@ -200,7 +200,7 @@ sequenceDiagram
     A->>K: POST /token(code + client_secret,server 對 server)
     K-->>A: access token + refresh token + ID token
     Note over A: 驗 ID token 簽章 → 建立 HttpSession<br/>token 存進 InMemoryOAuth2AuthorizedClientService<br/>LoginSuccessHandler 種下 ea_login_hint cookie
-    A-->>B: 302 → 原本要去的頁面(帶 JSESSIONID cookie)
+    A-->>B: 302 → 原本要去的頁面(帶 __Host-JSESSIONID cookie)
 ```
 
 注意第 10–11 步:token 交換發生在 **server 對 server** 的通道上,瀏覽器只經手一次性的 `code`,拿到的只有 session cookie。這就是 BFF 的核心性質。

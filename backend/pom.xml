@@ -4,10 +4,13 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
+    <!-- Keep on the latest 3.5.x patch: 3.5.4 shipped Spring Security 6.5.2,
+         inside the affected range of CVE-2025-41248 (fixed in 6.5.5 / Boot
+         3.5.6). Run the security-scan profile below to catch the next one. -->
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.5.4</version>
+        <version>3.5.16</version>
         <relativePath/>
     </parent>
 
@@ -72,4 +75,31 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- SCA (review F11): mvn -P security-scan verify
+             Deliberately NOT bound to the default build: the NVD download is
+             large and needs network access plus (since NVD API v2) an API key
+             — set it via -Dnvd.api.key=... or the NVD_API_KEY env var.
+             Alert especially on the security/oauth2 starters. -->
+        <profile>
+            <id>security-scan</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.owasp</groupId>
+                        <artifactId>dependency-check-maven</artifactId>
+                        <version>12.2.2</version>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

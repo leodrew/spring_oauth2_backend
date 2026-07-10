@@ -51,6 +51,7 @@ public class KeycloakLogoutSuccessHandler extends OidcClientInitiatedLogoutSucce
         clear.setPath(cookiePath);
         clear.setHttpOnly(true);
         clear.setSecure(cookieSecure);
+        clear.setAttribute("SameSite", "Lax");
         response.addCookie(clear);
 
         super.onLogoutSuccess(request, response, authentication);

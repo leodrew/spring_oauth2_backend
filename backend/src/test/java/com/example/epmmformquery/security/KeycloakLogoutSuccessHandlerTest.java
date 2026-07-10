@@ -71,5 +71,6 @@ class KeycloakLogoutSuccessHandlerTest {
         assertThat(c.getMaxAge()).isZero();
         assertThat(c.getPath()).isEqualTo("/gui_epmmFormQuery");
         assertThat(c.getSecure()).isTrue();
+        assertThat(c.getAttribute("SameSite")).isEqualTo("Lax");
     }
 }

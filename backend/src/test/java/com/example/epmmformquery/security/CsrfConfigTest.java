@@ -22,8 +22,12 @@ class CsrfConfigTest {
 
     @Test
     void csrfTokenIsExposedAsReadableCookieForTheSpa() throws Exception {
+        // must stay readable by JS (double-submit), and prefix-scoped instead
+        // of host-wide so sibling apps on the gateway host can't clobber it (F8)
         mockMvc.perform(get("/gui_epmmFormQuery/rs/gui/ping"))
-                .andExpect(cookie().exists("XSRF-TOKEN"));
+                .andExpect(cookie().exists("XSRF-TOKEN"))
+                .andExpect(cookie().httpOnly("XSRF-TOKEN", false))
+                .andExpect(cookie().path("XSRF-TOKEN", "/gui_epmmFormQuery"));
     }
 
     @Test

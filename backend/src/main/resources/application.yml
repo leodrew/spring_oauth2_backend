@@ -1,6 +1,6 @@
 # =============================================================================
 # pmc-epmmformquerygui — application.yml
-# Spring Boot 3.4.x · Spring Security 6.4.x · Java 17 · Keycloak OIDC
+# Spring Boot 3.5.x · Spring Security 6.5.x · Java 17 · Keycloak OIDC
 # =============================================================================
 
 app:
@@ -74,6 +74,15 @@ server:
     session:
       timeout: 8h
       cookie:
+        # __Host- prefix (review F8): the browser only accepts it with
+        # Secure, Path=/, no Domain — locking the cookie to this exact host.
+        # Plain-HTTP local dev rejects it: override with
+        # SERVER_SERVLET_SESSION_COOKIE_NAME=JSESSIONID (and cookie-secure
+        # settings) for local runs. Istio affinity is unaffected (Envoy uses
+        # its own epmm-affinity cookie, docs/istio-stickiness.md).
+        name: __Host-JSESSIONID
+        # Lax, not Strict, is deliberate (review D3): Strict would break the
+        # OAuth callback if Keycloak sits on a different registrable domain.
         same-site: lax
         secure: true
         http-only: true

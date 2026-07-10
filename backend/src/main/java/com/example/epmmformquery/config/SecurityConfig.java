@@ -15,6 +15,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.authority.mapping.GrantedAuthoritiesMapper;
 import org.springframework.security.core.session.SessionRegistry;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.core.oidc.user.OidcUserAuthority;
 import org.springframework.security.oauth2.core.user.OAuth2UserAuthority;
@@ -62,6 +63,7 @@ public class SecurityConfig {
 
     private final OAuth2AuthorizedClientRepository authorizedClientRepository;
     private final OAuth2AuthorizedClientManager authorizedClientManager;
+    private final OAuth2AuthorizedClientService authorizedClientService;
     private final SilentAuthRequestResolver silentAuthRequestResolver;
     private final SilentAuthFailureHandler silentAuthFailureHandler;
     private final SessionRegistry sessionRegistry;
@@ -93,6 +95,7 @@ public class SecurityConfig {
 
     public SecurityConfig(OAuth2AuthorizedClientRepository authorizedClientRepository,
                           OAuth2AuthorizedClientManager authorizedClientManager,
+                          OAuth2AuthorizedClientService authorizedClientService,
                           SilentAuthRequestResolver silentAuthRequestResolver,
                           SilentAuthFailureHandler silentAuthFailureHandler,
                           SessionRegistry sessionRegistry,
@@ -101,6 +104,7 @@ public class SecurityConfig {
                           PrivilegeCheckFilter privilegeCheckFilter) {
         this.authorizedClientRepository = authorizedClientRepository;
         this.authorizedClientManager = authorizedClientManager;
+        this.authorizedClientService = authorizedClientService;
         this.silentAuthRequestResolver = silentAuthRequestResolver;
         this.silentAuthFailureHandler = silentAuthFailureHandler;
         this.sessionRegistry = sessionRegistry;
@@ -189,16 +193,28 @@ public class SecurityConfig {
                 .successHandler(loginSuccessHandler(requestCache))
                 .failureHandler(silentAuthFailureHandler))
 
+            // GET logout is a documented deviation (review D7): RP-initiated
+            // logout needs a top-level navigation to follow the 302 to
+            // Keycloak's end_session, which fetch() cannot do.
             .logout(l -> l
                 .logoutRequestMatcher(
                         PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.GET, logoutUrl))
                 .logoutSuccessHandler(keycloakLogoutSuccessHandler)
                 .invalidateHttpSession(true)
                 .clearAuthentication(true)
-                .deleteCookies("JSESSIONID"))
+                // F16: purge the server-side tokens too — otherwise a
+                // still-valid access token lingers in the JVM map and entries
+                // accumulate until pod restart. Keyed by getName() = sub,
+                // consistent with the store (F15).
+                .addLogoutHandler((req, res, auth) -> {
+                    if (auth != null) {
+                        authorizedClientService.removeAuthorizedClient("keycloak", auth.getName());
+                    }
+                })
+                .deleteCookies("__Host-JSESSIONID"))
 
             .csrf(csrf -> csrf
-                .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+                .csrfTokenRepository(spaCsrfTokenRepository())
                 .csrfTokenRequestHandler(new SpaCsrfTokenRequestHandler())
                 .ignoringRequestMatchers(logoutUrl))
 
@@ -241,6 +257,22 @@ public class SecurityConfig {
             .addFilterBefore(privilegeCheckFilter, AuthorizationFilter.class);
 
         return http.build();
+    }
+
+    /**
+     * XSRF-TOKEN cookie for the SPA (double-submit pattern, review F8):
+     * readable by JS, scoped to the context prefix instead of host-wide
+     * Path=/ (a sibling app on the same gateway host must not be able to
+     * clobber it), explicit SameSite=Lax. httpOnly(false) must live in this
+     * same customizer — setCookieCustomizer REPLACES the customizer that
+     * CookieCsrfTokenRepository.withHttpOnlyFalse() installs, so composing
+     * them separately would silently re-enable HttpOnly and break the SPA.
+     */
+    private CookieCsrfTokenRepository spaCsrfTokenRepository() {
+        CookieCsrfTokenRepository repo = new CookieCsrfTokenRepository();
+        repo.setCookiePath(contextPrefix);
+        repo.setCookieCustomizer(c -> c.httpOnly(false).sameSite("Lax"));
+        return repo;
     }
 
     @Bean

@@ -58,6 +58,9 @@ public class LoginSuccessHandler extends SavedRequestAwareAuthenticationSuccessH
         hint.setPath(cookiePath);
         hint.setHttpOnly(true);
         hint.setSecure(cookieSecure);
+        // explicit rather than browser-default Lax (review F6); the servlet
+        // session.cookie.same-site property only covers the session cookie
+        hint.setAttribute("SameSite", "Lax");
         response.addCookie(hint);
 
         super.onAuthenticationSuccess(request, response, authentication);
